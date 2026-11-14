@@ -29,6 +29,8 @@
 #include "ui/renderers/rawdraw/font_debug_renderer.h"
 #include "ui/renderers/rawdraw/font_metrics_renderer.h"
 #include "ui/renderers/rawdraw/calendar_renderer.h"
+#include "ui/renderers/rawdraw/ink_weather_renderer.h"
+#include "ui/renderers/rawdraw/ink_calendar_renderer.h"
 #include "ui/renderers/rawdraw/ap_transfer_renderer.h"
 #include "ui/renderers/rawdraw/ap_transfer_server.h"
 #include "rawdraw/rawdraw.h"
@@ -157,7 +159,23 @@ public:
      * @brief Get the current active page
      */
     RawDrawPageId GetCurrentPage() const { return current_page_; }
+
+    /** @brief Call before Init(): page to start on (e.g. the page shown before deep sleep) */
+    void SetInitialPage(RawDrawPageId page) {
+        current_page_ = page;
+        status_bar_data_.page_title = GetPageTitle(page);
+        status_bar_data_.central_text.clear();
+    }
+    /** @brief Call before Init(): render the first frame without refreshing the panel */
+    void SetSkipInitialRefresh(bool skip) { skip_initial_refresh_ = skip; }
     bool IsDisplayRefreshPending() const;
+    /** @brief Stop queueing new panel refreshes while tearing down for deep sleep */
+    void BeginSleepTeardown();
+    bool IsSleepTeardown() const {
+        return sleep_teardown_.load(std::memory_order_acquire);
+    }
+    /** @return true if the panel became idle before timeout_ms */
+    bool WaitForDisplayRefreshIdle(uint32_t timeout_ms);
 
     /**
      * @brief Get the active page renderer (may be null)
@@ -197,6 +215,8 @@ public:
     }
     void StartApTransferMode();
     void StopApTransferMode();
+    /** @brief Stop LAN/AP HTTP without changing the visible page (for deep sleep) */
+    void StopHttpServersForSleep();
     void ShowWifiConfigPage(const std::string& ssid,
                             const std::string& password,
                             const std::string& url);
@@ -336,6 +356,8 @@ public:
     rawdraw::LogRenderer* GetLogRenderer() { return log_renderer_.get(); }
     rawdraw::YearProgressRenderer* GetYearProgressRenderer() { return yearprogress_renderer_.get(); }
     rawdraw::CalendarRenderer* GetCalendarRenderer() { return calendar_renderer_.get(); }
+    rawdraw::InkWeatherRenderer* GetInkWeatherRenderer() { return ink_weather_renderer_.get(); }
+    rawdraw::InkCalendarRenderer* GetInkCalendarRenderer() { return ink_calendar_renderer_.get(); }
     rawdraw::FontDebugRenderer* GetFontDebugRenderer() { return font_debug_renderer_.get(); }
     rawdraw::FontMetricsRenderer* GetFontMetricsRenderer() { return font_metrics_renderer_.get(); }
     rawdraw::ApTransferRenderer* GetApTransferRenderer() { return ap_transfer_renderer_.get(); }
@@ -418,6 +440,7 @@ private:
         RawDrawPageId page;
         const char* label;
         const char* icon;  // UTF-8 icon string (FontAwesome codepoint)
+        const lv_font_t* icon_font = nullptr;  // nullptr = fa_settings_16
     };
 
     // Display state
@@ -427,6 +450,7 @@ private:
 
     // Current page
     RawDrawPageId current_page_ = RawDrawPageId::Gallery;
+    bool skip_initial_refresh_ = false;
 
     // Status bar
     RawDrawStatusBarData status_bar_data_;
@@ -447,6 +471,8 @@ private:
     std::unique_ptr<rawdraw::LogRenderer> log_renderer_;
     std::unique_ptr<rawdraw::YearProgressRenderer> yearprogress_renderer_;
     std::unique_ptr<rawdraw::CalendarRenderer> calendar_renderer_;
+    std::unique_ptr<rawdraw::InkWeatherRenderer> ink_weather_renderer_;
+    std::unique_ptr<rawdraw::InkCalendarRenderer> ink_calendar_renderer_;
     std::unique_ptr<rawdraw::FontDebugRenderer> font_debug_renderer_;
     std::unique_ptr<rawdraw::FontMetricsRenderer> font_metrics_renderer_;
     std::unique_ptr<rawdraw::ApTransferRenderer> ap_transfer_renderer_;
@@ -469,8 +495,11 @@ private:
     std::atomic<bool> active_page_refresh_pending_{false};
     std::atomic<bool> gallery_slideshow_pending_{false};
     std::atomic<bool> input_refresh_locked_{false};
+    std::atomic<bool> sleep_teardown_{false};
     int last_clock_minute_key_ = -1;
     int gallery_slideshow_interval_minutes_ = 0;
+    std::mutex pending_show_mutex_;
+    std::string pending_show_photo_id_;
 
     // Voice wakeup overlay state
     rawdraw::VoiceWakeupState voice_wakeup_state_;
@@ -494,6 +523,7 @@ private:
     static void OnGallerySlideshowTimer(void* arg);
     void ArmGallerySlideshowTimer();
     bool AdvanceGallerySlideshow();
+    bool ApplyQueuedShowPhoto(const std::string& photo_id);
     void DrawGlobalPageFrame(uint8_t* fb, int width, int height);
     void DrawQuickSwitchOverlay(uint8_t* fb, int width, int height);
     bool HandleQuickSwitchInput(const rawdraw::ButtonEvent& event);
@@ -502,7 +532,7 @@ private:
     void RestoreQuickSwitchBacking(uint8_t* fb);
     void RedrawQuickSwitchOnly(uint8_t* fb);
     void RefreshRect(const rawdraw::Rect& rect, bool urgent = false);
-    static const std::array<QuickSwitchItem, 2>& GetQuickSwitchItems();
+    static const std::array<QuickSwitchItem, 4>& GetQuickSwitchItems();
     void MarkAllRenderersFullRefresh();
 };
 

@@ -1,34 +1,78 @@
 #include "application.h"
 
+#include "audio_codec.h"
 #include "boards/zectrix-s3-epaper-4.2/custom_lcd_display.h"
 #include "boards/zectrix-s3-epaper-4.2/config.h"
 #include "board.h"
+#include "common/qweather_client.h"
 #include "common/photo_storage.h"
+#include "common/power_diag.h"
+#include "common/weather_prefs.h"
+#include "common/weather_speaker.h"
 #include "display.h"
 #include "settings.h"
 #include "ui/rawdraw_ui_manager.h"
+#include "ui/settings_item_index.h"
 #include "wifi_manager.h"
 
 #include <esp_mac.h>
 #include <esp_log.h>
+#include <esp_attr.h>
+#include <esp_pm.h>
 #include <esp_sleep.h>
 #include <esp_sntp.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
 
+#include <cinttypes>
+#include <cmath>
+#include <cstdio>
 #include <ctime>
+#include <vector>
 
 namespace {
 
 constexpr char kTag[] = "Application";
-constexpr char kSyncNamespace[] = "sync";
-constexpr char kSyncIntervalKey[] = "sync_interval";
+
 constexpr char kGalleryNamespace[] = "gallery";
 constexpr char kSlideshowIntervalKey[] = "slide_min";
-constexpr int kSettingsSlideshowIndex = 3;
-constexpr int kSettingsWifiIndex = 5;
-constexpr int kSettingsHttpServerIndex = 6;
-constexpr int kSettingsLanIpIndex = 7;
+using ui::kSettingsAutoSpeakIndex;
+using ui::kSettingsBroadcastIndex;
+using ui::kSettingsDayRefreshIndex;
+using ui::kSettingsHttpServerIndex;
+using ui::kSettingsLanIpIndex;
+using ui::kSettingsNightRefreshIndex;
+using ui::kSettingsSlideshowIndex;
+using ui::kSettingsVolumeIndex;
+using ui::kSettingsWifiIndex;
+constexpr int64_t kIdleSleepUs = 5LL * 60 * 1000 * 1000;
+// Cap on waiting for a busy fetch/announcement/refresh before sleeping anyway.
+constexpr int64_t kIdleBusyMaxDeferUs = 2LL * 60 * 1000 * 1000;
+// Calendar page: redraw at least this often while asleep.
+constexpr int kCalendarWakeSec = 2 * 60 * 60;
+// Daily announcement: how late it may still play, how long to stay awake
+// waiting for it after a timer wake, and how long to wait for fresh data.
+constexpr int kBroadcastLateWindowMin = 60;
+constexpr int kBroadcastWaitAwakeMin = 10;
+constexpr int64_t kBroadcastFallbackUs = 90LL * 1000 * 1000;
+constexpr int64_t kWakeDecisionTimeoutUs = 45LL * 1000 * 1000;
+constexpr int64_t kResleepGraceUs = 5LL * 1000 * 1000;
+// Scheduled weather refresh after a timer wake: give up on Wi-Fi/fetch after this.
+constexpr int64_t kRefreshWakeTimeoutUs = 90LL * 1000 * 1000;
+
+enum TimerWakeReason : int {
+    kTimerWakeNone = 0,
+    kTimerWakeBroadcast = 1,
+    kTimerWakeRefresh = 2,
+    kTimerWakeCalendar = 3,
+};
+RTC_DATA_ATTR int s_timer_wake_reason = kTimerWakeNone;
+// Page shown when the device went to sleep; restored on wake for weather/calendar.
+RTC_DATA_ATTR int s_sleep_page = -1;
+
+int LocalDateKey(const struct tm& tm) {
+    return (tm.tm_year + 1900) * 10000 + (tm.tm_mon + 1) * 100 + tm.tm_mday;
+}
 
 std::string FormatMinutesLabel(int minutes) {
     if (minutes <= 0) return "关闭";
@@ -97,31 +141,39 @@ void StartSntpClockSyncOnce() {
         strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &local_tm);
         ESP_LOGI(kTag, "SNTP time synchronized: %s", time_buf);
         Application::GetInstance().UpdateStatusBarForUi();
+        Application::GetInstance().OnSntpSynced();
+        ink::PowerDiag::OnSntpSynced();
     });
     esp_sntp_init();
     s_started = true;
     ESP_LOGI(kTag, "SNTP started: tz=Asia/Shanghai servers=ntp.aliyun.com,cn.pool.ntp.org,pool.ntp.org");
 }
 
-bool IsLocalHttpServiceRunning(const ui::RawDrawUiManager* manager) {
-    return manager != nullptr && manager->IsHttpServerRunning();
+void ConfigureDynamicFrequency() {
+#if CONFIG_PM_ENABLE
+    // Automatic light sleep stays off: it would stall the I2S output and the
+    // GPIO button interrupts.
+    esp_pm_config_t pm_config = {};
+    pm_config.max_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ;
+    pm_config.min_freq_mhz = 80;
+    pm_config.light_sleep_enable = false;
+    const esp_err_t err = esp_pm_configure(&pm_config);
+    ESP_LOGI(kTag, "Dynamic frequency scaling %d-%d MHz: %s", pm_config.min_freq_mhz,
+             pm_config.max_freq_mhz, esp_err_to_name(err));
+#endif
 }
 
 }  // namespace
 
 Application::Application() = default;
 
-Application::~Application() {
-    if (sleep_timer_ != nullptr) {
-        esp_timer_stop(sleep_timer_);
-        esp_timer_delete(sleep_timer_);
-        sleep_timer_ = nullptr;
-    }
-}
+Application::~Application() = default;
 
 void Application::Initialize() {
     auto& board = Board::GetInstance();
     SetDeviceState(kDeviceStateStarting);
+    ConfigureDynamicFrequency();
+    ink::PowerDiag::OnBoot();
 
     AudioCodec* codec = board.GetAudioCodec();
     if (codec == nullptr) {
@@ -132,6 +184,7 @@ void Application::Initialize() {
 
     audio_service_.Initialize(codec);
     audio_service_.Start();
+    ink::WeatherSpeaker::GetInstance().SetAudioService(&audio_service_);
 
     Display* display = board.GetDisplay();
     if (display == nullptr) {
@@ -145,8 +198,24 @@ void Application::Initialize() {
         ESP_LOGW(kTag, "Photo storage init failed");
     }
 
+    const bool from_deep_sleep = esp_reset_reason() == ESP_RST_DEEPSLEEP;
+    const bool timer_wake = from_deep_sleep &&
+                            (esp_sleep_get_wakeup_causes() & BIT(ESP_SLEEP_WAKEUP_TIMER)) != 0;
+    woke_for_refresh_ = timer_wake && s_timer_wake_reason == kTimerWakeRefresh;
+    woke_for_calendar_ = timer_wake && s_timer_wake_reason == kTimerWakeCalendar;
+    woke_for_broadcast_ = timer_wake && !woke_for_refresh_ && !woke_for_calendar_;
+    s_timer_wake_reason = kTimerWakeNone;
+
     auto* lcd = static_cast<CustomLcdDisplay*>(display);
     rawdraw_ui_manager_ = std::make_unique<ui::RawDrawUiManager>();
+    if (from_deep_sleep && (s_sleep_page == static_cast<int>(ui::RawDrawPageId::Weather) ||
+                            s_sleep_page == static_cast<int>(ui::RawDrawPageId::Calendar))) {
+        rawdraw_ui_manager_->SetInitialPage(static_cast<ui::RawDrawPageId>(s_sleep_page));
+    }
+    s_sleep_page = -1;
+    // A weather refresh wake redraws once the new data lands; a broadcast wake only speaks.
+    rawdraw_ui_manager_->SetSkipInitialRefresh(woke_for_refresh_ || woke_for_broadcast_);
+    rawdraw::ApTransferServer::SetActivityCallback([this]() { MarkUserActivity(); });
     rawdraw_ui_manager_->Init(lcd, [lcd](const rawdraw::Rect&, bool urgent) {
         if (urgent) {
             lcd->RequestUrgentFullRefresh();
@@ -169,6 +238,13 @@ void Application::Initialize() {
 
         std::vector<rawdraw::SettingsItemDef> items;
         items.push_back({"系统", "", nullptr, rawdraw::SettingsItemType::Section, false});
+        rawdraw::SettingsItemDef volume_item{"音量", "", nullptr, rawdraw::SettingsItemType::Slider, false};
+        volume_item.slider_value = codec->output_volume();
+        volume_item.on_slider = [this, codec](int volume) {
+            codec->SetOutputVolume(volume);
+            PlayVolumePreview(volume);
+        };
+        items.push_back(std::move(volume_item));
         items.push_back({"重启", "执行", nullptr, rawdraw::SettingsItemType::Action, false,
                          []() { esp_restart(); }});
         items.push_back({"相册", "", nullptr, rawdraw::SettingsItemType::Section, false});
@@ -182,16 +258,23 @@ void Application::Initialize() {
                              if (rawdraw_ui_manager_) {
                                  rawdraw_ui_manager_->SetGallerySlideshowIntervalMinutes(next);
                              }
-                             if (next > 0 && sleep_timer_ != nullptr) {
-                                 esp_timer_stop(sleep_timer_);
-                                 ESP_LOGI(kTag, "Sync sleep timer paused while gallery slideshow is enabled");
-                             } else if (next <= 0 &&
-                                        (wifi_connected_.load(std::memory_order_acquire) ||
-                                         WifiManager::GetInstance().IsConnected())) {
-                                 ArmSyncSleepTimer();
-                             }
                              sr->UpdateItem(kSettingsSlideshowIndex, FormatMinutesLabel(next));
                          }});
+        items.push_back({"天气", "", nullptr, rawdraw::SettingsItemType::Section, false});
+        items.push_back({"播报时间", ink::FormatBroadcastTime(ink::GetBroadcastMinute()), nullptr,
+                         rawdraw::SettingsItemType::Action, false,
+                         []() {
+                             ink::SetBroadcastMinute(ink::NextBroadcastMinute(ink::GetBroadcastMinute()));
+                         }});
+        items.push_back({"自动播报", ink::GetAutoSpeak() ? "开启" : "关闭", nullptr,
+                         rawdraw::SettingsItemType::Checkbox, ink::GetAutoSpeak(),
+                         []() { ink::SetAutoSpeak(!ink::GetAutoSpeak()); }});
+        items.push_back({"白天更新", ink::FormatRefreshMinutes(ink::GetDayRefreshMin()), nullptr,
+                         rawdraw::SettingsItemType::Action, false,
+                         []() { ink::SetDayRefreshMin(ink::NextRefreshMinutes(ink::GetDayRefreshMin())); }});
+        items.push_back({"夜间更新", ink::FormatRefreshMinutes(ink::GetNightRefreshMin()), nullptr,
+                         rawdraw::SettingsItemType::Action, false,
+                         []() { ink::SetNightRefreshMin(ink::NextRefreshMinutes(ink::GetNightRefreshMin())); }});
         items.push_back({"网络", "", nullptr, rawdraw::SettingsItemType::Section, false});
         items.push_back({"Wi-Fi", "未连接", nullptr, rawdraw::SettingsItemType::Checkbox, false,
                          [this, sr]() {
@@ -221,10 +304,6 @@ void Application::Initialize() {
                                  rawdraw_ui_manager_->StopLanHttpServer();
                                  UpdateHttpServerSettingsItem(sr, false);
                                  UpdateStatusBarForUi();
-                                 if (wifi_connected_.load(std::memory_order_acquire) ||
-                                     WifiManager::GetInstance().IsConnected()) {
-                                     ArmSyncSleepTimer();
-                                 }
                                  return;
                              }
 
@@ -245,10 +324,6 @@ void Application::Initialize() {
                              const bool started = rawdraw_ui_manager_->StartLanHttpServer(ip);
                              ESP_LOGI(kTag, "LAN HTTP server toggled ON: started=%d url=http://%s/",
                                       started ? 1 : 0, ip.c_str());
-                             if (started && sleep_timer_ != nullptr) {
-                                 esp_timer_stop(sleep_timer_);
-                                 ESP_LOGI(kTag, "Sync sleep timer paused while LAN HTTP server is running");
-                             }
                              UpdateHttpServerSettingsItem(sr, started, started ? ip : "");
                              UpdateLanIpSettingsItem(sr, started ? ip : WifiManager::GetInstance().GetIpAddress());
                              UpdateStatusBarForUi();
@@ -274,8 +349,22 @@ void Application::Initialize() {
         sr->SetDeviceInfo(mac_str, "ESP32-S3");
     }
 
+    SetupInkWeather();
+    SetupWeatherSettingsItems();
+
     ESP_LOGI(kTag, "Rawdraw gallery UI initialized");
-    if (esp_reset_reason() == ESP_RST_DEEPSLEEP) {
+    if (woke_for_broadcast_) {
+        ESP_LOGI(kTag, "Timer wake for the daily weather announcement at %s",
+                 ink::FormatBroadcastTime(ink::GetBroadcastMinute()).c_str());
+    }
+    if (woke_for_refresh_) {
+        ESP_LOGI(kTag, "Timer wake for the scheduled weather refresh");
+    }
+    if (woke_for_calendar_) {
+        ESP_LOGI(kTag, "Timer wake to redraw the calendar; staying offline");
+        resleep_pending_.store(true);
+    }
+    if (from_deep_sleep && !timer_wake) {
         ESP_LOGI(kTag, "Wake from deep sleep: flash activity LED and refresh UI");
         board.FlashActivityLed();
         if (rawdraw_ui_manager_) {
@@ -289,6 +378,7 @@ void Application::Initialize() {
             case NetworkEvent::Connected:
                 ESP_LOGI(kTag, "WiFi connected: %s", data.c_str());
                 wifi_connected_.store(true, std::memory_order_release);
+                Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::BALANCED);
                 StartSntpClockSyncOnce();
                 if (rawdraw_ui_manager_ && !rawdraw_ui_manager_->IsLanHttpServerRunning()) {
                     const std::string ip = data.empty() ? WifiManager::GetInstance().GetIpAddress() : data;
@@ -309,7 +399,7 @@ void Application::Initialize() {
                     rawdraw_ui_manager_->SwitchPage(ui::RawDrawPageId::Gallery);
                 }
                 UpdateStatusBarForUi();
-                ArmSyncSleepTimer();
+                StartWeatherFetch(broadcast_pending_.load() || woke_for_refresh_);
                 break;
             case NetworkEvent::Disconnected:
                 ESP_LOGI(kTag, "WiFi disconnected");
@@ -322,7 +412,10 @@ void Application::Initialize() {
             case NetworkEvent::Connecting:
             case NetworkEvent::Scanning:
                 wifi_connected_.store(false, std::memory_order_release);
-                UpdateStatusBarForUi();
+                // Scanning/connecting would otherwise start a 20s four-color
+                // refresh with the disconnected icon, which then races the
+                // later Connected frame.
+                UpdateStatusBarForUi(false);
                 break;
             case NetworkEvent::WifiConfigModeEnter:
                 ESP_LOGI(kTag, "WiFi config mode entered: %s", data.c_str());
@@ -339,12 +432,12 @@ void Application::Initialize() {
                 if (rawdraw_ui_manager_ &&
                     rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::APTransfer &&
                     !rawdraw_ui_manager_->IsApTransferModeRunning()) {
-                    ESP_LOGI(kTag, "WiFi config AP exited, returning to gallery");
-                    rawdraw_ui_manager_->SwitchPage(ui::RawDrawPageId::Gallery);
+                    ESP_LOGI(kTag, "WiFi config AP exited, returning to gallery without EPD refresh");
+                    rawdraw_ui_manager_->SetCurrentPageWithoutRender(ui::RawDrawPageId::Gallery);
                 }
                 wifi_connected_.store(WifiManager::GetInstance().IsConnected(),
                                       std::memory_order_release);
-                UpdateStatusBarForUi();
+                UpdateStatusBarForUi(wifi_connected_.load(std::memory_order_acquire));
                 break;
             case NetworkEvent::ModemDetecting:
             case NetworkEvent::ModemErrorNoSim:
@@ -357,13 +450,17 @@ void Application::Initialize() {
         }
     });
 
-    // Start network (non-blocking, WiFi connects asynchronously)
-    board.RequestNetwork();
+    // Start network (non-blocking, WiFi connects asynchronously). A calendar redraw
+    // needs no network; it starts later if a button keeps the device awake.
+    if (!woke_for_calendar_) {
+        board.RequestNetwork();
+    }
 
     SetDeviceState(kDeviceStateIdle);
 }
 
 void Application::OnUpClick() {
+    MarkUserActivity();
     ESP_LOGI(kTag, "UP click");
     Board::GetInstance().FlashActivityLed();
     if (rawdraw_ui_manager_) {
@@ -371,7 +468,354 @@ void Application::OnUpClick() {
     }
 }
 
+void Application::OnUpDoubleClick() {
+    MarkUserActivity();
+    ESP_LOGI(kTag, "UP double click");
+    Board::GetInstance().FlashActivityLed();
+    if (rawdraw_ui_manager_) {
+        rawdraw_ui_manager_->HandleInput(rawdraw::ButtonEvent{rawdraw::ButtonEvent::kUpDoubleClick});
+    }
+}
+
+void Application::SetupInkWeather() {
+    auto* wr = rawdraw_ui_manager_ ? rawdraw_ui_manager_->GetInkWeatherRenderer() : nullptr;
+    if (!wr) return;
+
+    auto& client = ink::QWeatherClient::GetInstance();
+    if (!client.HasKeys()) {
+        ESP_LOGW(kTag, "QWeather credentials missing; set CONFIG_QWEATHER_* in sdkconfig");
+        wr->SetUnconfigured(true);
+    }
+    ink::WeatherData cached;
+    if (client.LoadCache(&cached)) {
+        ESP_LOGI(kTag, "Loaded cached weather for %s", cached.city.c_str());
+        wr->SetData(cached);
+    }
+    client.SetCallback([this, wr](bool ok, const ink::WeatherData& data) {
+        if (ok) {
+            wr->SetData(data);
+        } else {
+            wr->SetFailed(true);
+        }
+        if (rawdraw_ui_manager_ &&
+            rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::Weather) {
+            rawdraw_ui_manager_->RequestActivePageRefresh();
+        }
+        OnWeatherFetched(ok, data);
+    });
+    wr->SetSpeakCallback([this]() {
+        if (SpeakCachedWeather()) {
+            page_speech_.store(true);
+            return;
+        }
+        speak_after_fetch_.store(true);
+        StartWeatherFetch(true);
+    });
+    wr->SetRefreshCallback([this]() {
+        ink::WeatherSpeaker::GetInstance().Stop();
+        speak_after_fetch_.store(false);
+        page_speech_.store(false);
+        StartWeatherFetch(true);
+    });
+    rawdraw_ui_manager_->SetPageSwitchCallback([this](ui::RawDrawPageId page) {
+        OnWeatherPageSwitched(page == ui::RawDrawPageId::Weather);
+    });
+}
+
+void Application::SetupWeatherSettingsItems() {
+    ink::SetWeatherPrefsChangedCallback([this]() {
+        auto* sr = rawdraw_ui_manager_ ? rawdraw_ui_manager_->GetSettingsRenderer() : nullptr;
+        if (!sr) return;
+        const bool auto_speak = ink::GetAutoSpeak();
+        sr->UpdateItem(kSettingsBroadcastIndex, ink::FormatBroadcastTime(ink::GetBroadcastMinute()));
+        sr->UpdateChecked(kSettingsAutoSpeakIndex, auto_speak);
+        sr->UpdateItem(kSettingsAutoSpeakIndex, auto_speak ? "开启" : "关闭");
+        sr->UpdateItem(kSettingsDayRefreshIndex, ink::FormatRefreshMinutes(ink::GetDayRefreshMin()));
+        sr->UpdateItem(kSettingsNightRefreshIndex, ink::FormatRefreshMinutes(ink::GetNightRefreshMin()));
+        last_broadcast_check_minute_ = -1;
+        last_refresh_check_minute_ = -1;
+        rawdraw_ui_manager_->RequestActivePageRefresh();
+    });
+}
+
+bool Application::StartWeatherFetch(bool force) {
+    auto* wr = rawdraw_ui_manager_ ? rawdraw_ui_manager_->GetInkWeatherRenderer() : nullptr;
+    if (!wifi_connected_.load(std::memory_order_acquire) && !WifiManager::GetInstance().IsConnected()) {
+        if (force && wr) wr->SetFailed(true);
+        return false;
+    }
+    auto& client = ink::QWeatherClient::GetInstance();
+    if (!client.HasKeys()) return false;
+    if (!ink::QWeatherClient::IsClockValid()) {
+        // The JWT needs real time; the SNTP sync callback retries.
+        if (wr && !wr->HasData()) wr->SetLoading(true);
+        return false;
+    }
+    const bool started = client.RequestFetch(force);
+    if (started && wr && !wr->HasData()) {
+        wr->SetLoading(true);
+    }
+    return started;
+}
+
+void Application::OnSntpSynced() {
+    sntp_synced_.store(true);
+    StartWeatherFetch(broadcast_pending_.load() || woke_for_refresh_);
+}
+
+void Application::OnWeatherPageSwitched(bool entered) {
+    if (!entered) {
+        speak_after_fetch_.store(false);
+        if (page_speech_.exchange(false)) {
+            ink::WeatherSpeaker::GetInstance().Stop();
+        }
+        return;
+    }
+    const bool started = StartWeatherFetch(false);
+    if (!ink::GetAutoSpeak()) return;
+    auto* wr = rawdraw_ui_manager_ ? rawdraw_ui_manager_->GetInkWeatherRenderer() : nullptr;
+    const bool has_data = wr && wr->HasData();
+    if (started || ink::QWeatherClient::GetInstance().IsFetching() || !has_data) {
+        // Speak once the fetch lands (or a later one, if Wi-Fi/time is not ready yet).
+        speak_after_fetch_.store(true);
+        return;
+    }
+    if (SpeakCachedWeather()) page_speech_.store(true);
+}
+
+void Application::OnWeatherFetched(bool ok, const ink::WeatherData& data) {
+    const bool on_page = rawdraw_ui_manager_ &&
+                         rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::Weather;
+    if (woke_for_refresh_) {
+        ESP_LOGI(kTag, "Scheduled weather refresh after timer wake: %s", ok ? "ok" : "failed");
+        woke_for_refresh_ = false;
+        if (rawdraw_ui_manager_ && !on_page) rawdraw_ui_manager_->RequestActivePageRefresh();
+        resleep_pending_.store(true);
+    }
+    const bool page_speak = speak_after_fetch_.exchange(false) && on_page;
+    const bool broadcast = broadcast_pending_.exchange(false);
+    if (!page_speak && !broadcast) return;
+
+    const bool spoken = ok ? SpeakWeather(data) : SpeakCachedWeather();
+    page_speech_.store(spoken && page_speak && !broadcast);
+    if (broadcast) {
+        ESP_LOGI(kTag, "Daily weather announcement: %s", ok ? "fresh data" : "fetch failed, cached data");
+        FinishBroadcast();
+    }
+}
+
+bool Application::SpeakWeather(const ink::WeatherData& data) {
+    AudioCodec* codec = Board::GetInstance().GetAudioCodec();
+    if (codec != nullptr && codec->output_volume() <= 0) {
+        ESP_LOGI(kTag, "Volume is 0; skipping weather speech");
+        return false;
+    }
+    const std::string text = ink::BuildWeatherSpeech(data);
+    if (text.empty()) return false;
+    ink::WeatherSpeaker::GetInstance().Speak(text);
+    return true;
+}
+
+bool Application::SpeakCachedWeather() {
+    ink::WeatherData cached;
+    if (!ink::QWeatherClient::GetInstance().LoadCache(&cached)) return false;
+    return SpeakWeather(cached);
+}
+
+void Application::CheckDailyBroadcast() {
+    const int64_t now_us = esp_timer_get_time();
+    if (broadcast_pending_.load() && now_us - broadcast_started_us_ > kBroadcastFallbackUs &&
+        !ink::QWeatherClient::GetInstance().IsFetching()) {
+        broadcast_pending_.store(false);
+        ESP_LOGW(kTag, "Daily weather announcement: no fresh data in time, using cache");
+        page_speech_.store(false);
+        SpeakCachedWeather();
+        FinishBroadcast();
+    }
+
+    if (user_active_.load() &&
+        (woke_for_broadcast_ || woke_for_refresh_ || woke_for_calendar_ || resleep_pending_.load())) {
+        ESP_LOGI(kTag, "Button pressed after timer wake; staying awake");
+        woke_for_broadcast_ = false;
+        woke_for_refresh_ = false;
+        resleep_pending_.store(false);
+        if (woke_for_calendar_) {
+            woke_for_calendar_ = false;
+            Board::GetInstance().RequestNetwork();
+        }
+    }
+    if (woke_for_refresh_ && now_us > kRefreshWakeTimeoutUs &&
+        !ink::QWeatherClient::GetInstance().IsFetching()) {
+        ESP_LOGW(kTag, "Scheduled weather refresh: no data in time; back to sleep");
+        woke_for_refresh_ = false;
+        resleep_pending_.store(true);
+    }
+    if (resleep_pending_.load()) {
+        const bool busy = ink::WeatherSpeaker::GetInstance().IsSpeaking() || !audio_service_.IsIdle() ||
+                          ink::QWeatherClient::GetInstance().IsFetching() ||
+                          broadcast_pending_.load() ||
+                          (rawdraw_ui_manager_ && rawdraw_ui_manager_->IsDisplayRefreshPending());
+        if (busy) {
+            resleep_ready_us_ = 0;
+        } else if (resleep_ready_us_ == 0) {
+            resleep_ready_us_ = now_us;
+        } else if (now_us - resleep_ready_us_ > kResleepGraceUs) {
+            ESP_LOGI(kTag, "Announcement done after timer wake; back to sleep");
+            resleep_pending_.store(false);
+            EnterManualSleep();
+            return;
+        }
+    }
+
+    if (!ink::QWeatherClient::IsClockValid()) return;
+    // After a timer wake the RTC may have drifted; wait for SNTP before deciding.
+    if (woke_for_broadcast_ && !sntp_synced_.load() && now_us < kWakeDecisionTimeoutUs) return;
+
+    const time_t now = time(nullptr);
+    struct tm local_tm = {};
+    localtime_r(&now, &local_tm);
+    const int now_minute = local_tm.tm_hour * 60 + local_tm.tm_min;
+    if (now_minute == last_broadcast_check_minute_ && !woke_for_broadcast_) return;
+    last_broadcast_check_minute_ = now_minute;
+
+    const int target = ink::GetBroadcastMinute();
+    const int today = LocalDateKey(local_tm);
+    if (target != ink::kBroadcastOff && ink::GetLastBroadcastDate() != today &&
+        now_minute >= target && now_minute < target + kBroadcastLateWindowMin) {
+        TriggerDailyBroadcast(today);
+        return;
+    }
+    if (!woke_for_broadcast_ || broadcast_pending_.load() || resleep_pending_.load()) return;
+
+    const int minutes_left = target == ink::kBroadcastOff ? -1 : target - now_minute;
+    if (minutes_left > 0 && minutes_left <= kBroadcastWaitAwakeMin) return;
+    // Woke too early (RTC drift) or the time changed: sleep again until the target.
+    ESP_LOGI(kTag, "Timer wake: announcement not due (%d min left); back to sleep", minutes_left);
+    woke_for_broadcast_ = false;
+    resleep_pending_.store(true);
+}
+
+void Application::TriggerDailyBroadcast(int today) {
+    ESP_LOGI(kTag, "Daily weather announcement due (%d)", today);
+    ink::SetLastBroadcastDate(today);
+    speak_after_fetch_.store(false);
+    broadcast_pending_.store(true);
+    broadcast_started_us_ = esp_timer_get_time();
+    if (StartWeatherFetch(true) || ink::QWeatherClient::GetInstance().IsFetching()) return;
+
+    const bool online = wifi_connected_.load(std::memory_order_acquire) ||
+                        WifiManager::GetInstance().IsConnected();
+    if (online || !ink::QWeatherClient::GetInstance().HasKeys()) {
+        // Nothing fresh is coming (e.g. backing off after an API error).
+        broadcast_pending_.store(false);
+        page_speech_.store(false);
+        SpeakCachedWeather();
+        FinishBroadcast();
+    }
+    // Otherwise the Wi-Fi Connected handler starts a forced fetch.
+}
+
+void Application::FinishBroadcast() {
+    if (woke_for_broadcast_) {
+        woke_for_broadcast_ = false;
+        resleep_pending_.store(true);
+    }
+}
+
+uint32_t Application::ArmTimerWakeup(uint32_t* programmed_s) {
+    if (programmed_s) *programmed_s = 0;
+    s_timer_wake_reason = kTimerWakeNone;
+    if (!ink::QWeatherClient::IsClockValid()) return 0;
+    const time_t now = time(nullptr);
+    struct tm local_tm = {};
+    localtime_r(&now, &local_tm);
+    const int now_sec = local_tm.tm_hour * 3600 + local_tm.tm_min * 60 + local_tm.tm_sec;
+
+    int broadcast_wake = -1;
+    const int target = ink::GetBroadcastMinute();
+    if (target != ink::kBroadcastOff) {
+        const int seconds = ink::SecondsUntilMinuteOfDay(local_tm.tm_hour, local_tm.tm_min,
+                                                        local_tm.tm_sec, target);
+        // A 20 s lead lets CheckDailyBroadcast() wait or sleep again for the remainder.
+        broadcast_wake = seconds - 20;
+        if (broadcast_wake < 1) broadcast_wake = 1;
+    }
+
+    // Page-specific wake: weather and calendar step toward :00/:30 or hour marks;
+    // other pages only keep the announcement.
+    const auto page = rawdraw_ui_manager_ ? rawdraw_ui_manager_->GetCurrentPage()
+                                          : ui::RawDrawPageId::Gallery;
+    int page_wake = -1;
+    int page_reason = kTimerWakeNone;
+    if (page == ui::RawDrawPageId::Weather) {
+        page_wake = ink::SecondsUntilNextRefresh(now_sec,
+                                                 ink::QWeatherClient::GetInstance().CacheAgeSec());
+        if (page_wake == 0) {
+            const int interval = ink::RefreshMinAt(now_sec / 60);
+            page_wake = ink::SecondsUntilSteppedAlign(now_sec, interval);
+        }
+        page_reason = kTimerWakeRefresh;
+    } else if (page == ui::RawDrawPageId::Calendar) {
+        constexpr int kCalendarIntervalMin = kCalendarWakeSec / 60;
+        const int stepped = ink::SecondsUntilSteppedAlign(now_sec, kCalendarIntervalMin);
+        const int to_midnight = 24 * 3600 - now_sec + 30;
+        page_wake = (stepped > 0 && stepped <= to_midnight) ? stepped : to_midnight;
+        if (page_wake < 60) page_wake = 60;
+        page_reason = kTimerWakeCalendar;
+    }
+
+    if (broadcast_wake < 0 && page_wake < 0) {
+        ESP_LOGI(kTag, "No timer wake for page %s; BOOT wakes device",
+                 ui::RawDrawUiManager::GetPageTitle(page));
+        return 0;
+    }
+    const bool use_page = page_wake >= 0 && (broadcast_wake < 0 || page_wake < broadcast_wake);
+    const int wall_s = use_page ? page_wake : broadcast_wake;
+    s_timer_wake_reason = use_page ? page_reason : kTimerWakeBroadcast;
+    const uint32_t rc_s = ink::PowerDiag::CompensateSleepSec(static_cast<uint32_t>(wall_s));
+    if (programmed_s) *programmed_s = rc_s;
+    if (rc_s > 0) {
+        esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(rc_s) * 1000000ULL);
+    }
+    const float scale = ink::PowerDiag::RcSleepScale();
+    if (!use_page) {
+        ESP_LOGI(kTag, "Timer wake armed in %d s wall / %" PRIu32 " s RC (scale %.4f) for the %s announcement",
+                 wall_s, rc_s, scale, ink::FormatBroadcastTime(target).c_str());
+    } else if (page_reason == kTimerWakeRefresh) {
+        ESP_LOGI(kTag, "Timer wake armed in %d s wall / %" PRIu32 " s RC (scale %.4f) for the scheduled weather refresh",
+                 wall_s, rc_s, scale);
+    } else {
+        ESP_LOGI(kTag, "Timer wake armed in %d s wall / %" PRIu32 " s RC (scale %.4f) to redraw the calendar",
+                 wall_s, rc_s, scale);
+    }
+    return static_cast<uint32_t>(wall_s);
+}
+
+void Application::CheckWeatherRefresh() {
+    if (!ink::QWeatherClient::IsClockValid()) return;
+    auto& client = ink::QWeatherClient::GetInstance();
+    if (client.IsFetching()) return;
+    const time_t now = time(nullptr);
+    struct tm local_tm = {};
+    localtime_r(&now, &local_tm);
+    const int now_minute = local_tm.tm_hour * 60 + local_tm.tm_min;
+    if (now_minute == last_refresh_check_minute_) return;
+    last_refresh_check_minute_ = now_minute;
+    const int now_sec = local_tm.tm_hour * 3600 + local_tm.tm_min * 60 + local_tm.tm_sec;
+    if (ink::SecondsUntilNextRefresh(now_sec, client.CacheAgeSec()) != 0) return;
+    if (StartWeatherFetch(false)) {
+        ESP_LOGI(kTag, "Scheduled weather refresh (%s interval)",
+                 ink::FormatRefreshMinutes(ink::RefreshMinAt(now_minute)).c_str());
+    }
+}
+
+void Application::MarkUserActivity() {
+    user_active_.store(true);
+    last_activity_us_.store(esp_timer_get_time());
+}
+
 void Application::OnDownClick() {
+    MarkUserActivity();
     ESP_LOGI(kTag, "DOWN click");
     Board::GetInstance().FlashActivityLed();
     if (rawdraw_ui_manager_) {
@@ -379,12 +823,44 @@ void Application::OnDownClick() {
     }
 }
 
+bool Application::AdjustSettingsSlider(int delta) {
+    if (!rawdraw_ui_manager_ ||
+        rawdraw_ui_manager_->GetCurrentPage() != ui::RawDrawPageId::Settings) {
+        return false;
+    }
+    auto* sr = rawdraw_ui_manager_->GetSettingsRenderer();
+    if (!sr || !sr->AdjustSelectedSlider(delta)) return false;
+    rawdraw_ui_manager_->RequestActivePageRefresh();
+    return true;
+}
+
+void Application::PlayVolumePreview(int volume) {
+    if (volume <= 0) return;
+    constexpr int kSampleRate = AUDIO_OUTPUT_SAMPLE_RATE;
+    constexpr int kDurationMs = 150;
+    constexpr int kSamples = kSampleRate * kDurationMs / 1000;
+    constexpr int kFadeSamples = kSampleRate * 10 / 1000;
+    constexpr float kToneHz = 880.0f;
+    std::vector<int16_t> pcm(kSamples);
+    for (int i = 0; i < kSamples; ++i) {
+        float amp = 12000.0f;
+        if (i < kFadeSamples) amp *= static_cast<float>(i) / kFadeSamples;
+        if (kSamples - i < kFadeSamples) amp *= static_cast<float>(kSamples - i) / kFadeSamples;
+        pcm[i] = static_cast<int16_t>(amp * sinf(2.0f * static_cast<float>(M_PI) * kToneHz * i / kSampleRate));
+    }
+    audio_service_.UnmuteOutput();
+    audio_service_.PlayPcm(std::move(pcm));
+}
+
 void Application::OnUpLongPress() {
     ESP_LOGI(kTag, "UP long press");
     NoteButtonActivity();
-    if (rawdraw_ui_manager_ &&
-        rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::Settings) {
-        ESP_LOGI(kTag, "UP long press - leaving settings");
+    if (!rawdraw_ui_manager_) return;
+    if (AdjustSettingsSlider(rawdraw::SettingsRenderer::kSliderLongPressStep)) return;
+    const auto page = rawdraw_ui_manager_->GetCurrentPage();
+    if (page == ui::RawDrawPageId::Settings || page == ui::RawDrawPageId::Weather ||
+        page == ui::RawDrawPageId::Calendar) {
+        ESP_LOGI(kTag, "UP long press - returning to gallery");
         rawdraw_ui_manager_->SwitchPage(ui::RawDrawPageId::Gallery);
     }
 }
@@ -392,6 +868,7 @@ void Application::OnUpLongPress() {
 void Application::OnDownLongPress() {
     ESP_LOGI(kTag, "DOWN long press");
     NoteButtonActivity();
+    if (AdjustSettingsSlider(-rawdraw::SettingsRenderer::kSliderLongPressStep)) return;
     if (rawdraw_ui_manager_) {
         ESP_LOGI(kTag, "DOWN long press - entering settings");
         rawdraw_ui_manager_->SwitchPage(ui::RawDrawPageId::Settings);
@@ -405,10 +882,20 @@ void Application::OnWifiConfigComboLongPress() {
 }
 
 void Application::OnBootClick() {
+    MarkUserActivity();
     ESP_LOGI(kTag, "BOOT click");
     Board::GetInstance().FlashActivityLed();
     if (rawdraw_ui_manager_) {
         rawdraw_ui_manager_->HandleInput(rawdraw::ButtonEvent{rawdraw::ButtonEvent::kBootClick});
+    }
+}
+
+void Application::OnBootDoubleClick() {
+    MarkUserActivity();
+    ESP_LOGI(kTag, "BOOT double click");
+    Board::GetInstance().FlashActivityLed();
+    if (rawdraw_ui_manager_) {
+        rawdraw_ui_manager_->HandleInput(rawdraw::ButtonEvent{rawdraw::ButtonEvent::kBootDoubleClick});
     }
 }
 
@@ -429,6 +916,7 @@ void Application::OnBootLongPress() {
 }
 
 void Application::NoteButtonActivity() {
+    MarkUserActivity();
     Board::GetInstance().FlashActivityLed();
     if (rawdraw_ui_manager_) {
         rawdraw_ui_manager_->RequestActivePageRefresh();
@@ -451,81 +939,73 @@ void Application::EnterWifiConfigMode() {
     UpdateStatusBarForUi();
 }
 
-void Application::ArmSyncSleepTimer() {
-    if (IsLocalHttpServiceRunning(rawdraw_ui_manager_.get())) {
-        if (sleep_timer_ != nullptr) {
-            esp_timer_stop(sleep_timer_);
-        }
-        ESP_LOGI(kTag, "Sync sleep timer skipped while local HTTP transfer service is running");
-        return;
+bool Application::IsSleepBlockedByPage() const {
+    if (!rawdraw_ui_manager_) return false;
+    if (WifiManager::GetInstance().IsConfigMode()) return true;
+    if (rawdraw_ui_manager_->IsApTransferModeRunning()) return true;
+    const auto page = rawdraw_ui_manager_->GetCurrentPage();
+    if (page == ui::RawDrawPageId::APTransfer) return true;
+    if (page == ui::RawDrawPageId::Gallery || page == ui::RawDrawPageId::PhotoDetail) {
+        return rawdraw_ui_manager_->GetGallerySlideshowIntervalMinutes() > 0;
     }
-    if (rawdraw_ui_manager_ &&
-        rawdraw_ui_manager_->GetGallerySlideshowIntervalMinutes() > 0) {
-        if (sleep_timer_ != nullptr) {
-            esp_timer_stop(sleep_timer_);
-        }
-        ESP_LOGI(kTag, "Sync sleep timer skipped while gallery slideshow is enabled");
-        return;
-    }
-
-    Settings nvs(kSyncNamespace, false);
-    const int interval_minutes = nvs.GetInt(kSyncIntervalKey, 30);
-    if (interval_minutes <= 0) {
-        ESP_LOGI(kTag, "Sync sleep interval: 关闭");
-        return;
-    }
-    if (sleep_timer_ == nullptr) {
-        esp_timer_create_args_t args = {};
-        args.callback = [](void* arg) {
-            static_cast<Application*>(arg)->EnterScheduledSleep();
-        };
-        args.arg = this;
-        args.dispatch_method = ESP_TIMER_TASK;
-        args.name = "app_sync_sleep";
-        ESP_ERROR_CHECK(esp_timer_create(&args, &sleep_timer_));
-    }
-    esp_timer_stop(sleep_timer_);
-    const int64_t delay_us = static_cast<int64_t>(interval_minutes) * 60 * 1000 * 1000;
-    ESP_LOGI(kTag, "Sync sleep interval: %d minutes", interval_minutes);
-    ESP_LOGI(kTag, "Scheduling sleep after sync interval: %d minutes", interval_minutes);
-    ESP_ERROR_CHECK(esp_timer_start_once(sleep_timer_, delay_us));
+    return false;
 }
 
-void Application::EnterScheduledSleep() {
-    if (IsLocalHttpServiceRunning(rawdraw_ui_manager_.get())) {
-        ESP_LOGI(kTag, "Scheduled sleep skipped: local HTTP transfer service is running");
-        ArmSyncSleepTimer();
-        return;
-    }
-    if (rawdraw_ui_manager_ &&
-        rawdraw_ui_manager_->GetGallerySlideshowIntervalMinutes() > 0) {
-        ESP_LOGI(kTag, "Scheduled sleep skipped: gallery slideshow is enabled");
-        ArmSyncSleepTimer();
-        return;
-    }
+bool Application::IsBusyForSleep() {
+    return ink::QWeatherClient::GetInstance().IsFetching() ||
+           ink::WeatherSpeaker::GetInstance().IsSpeaking() ||
+           broadcast_pending_.load() || !audio_service_.IsIdle() ||
+           (rawdraw_ui_manager_ && rawdraw_ui_manager_->IsDisplayRefreshPending());
+}
 
-    ESP_LOGI(kTag, "Entering deep sleep after sync interval; BOOT wakes device");
-    wifi_connected_.store(false, std::memory_order_release);
-    esp_wifi_disconnect();
-    esp_wifi_stop();
-    esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(BOOT_BUTTON_GPIO), 0);
-    esp_deep_sleep_start();
+void Application::CheckIdleSleep() {
+    // Timer-wake flows handle their own resleep.
+    if (resleep_pending_.load() || woke_for_refresh_ || woke_for_broadcast_) return;
+    if (IsSleepBlockedByPage()) return;
+    const int64_t idle_us = esp_timer_get_time() - last_activity_us_.load();
+    if (idle_us < kIdleSleepUs) return;
+    if (IsBusyForSleep() && idle_us < kIdleSleepUs + kIdleBusyMaxDeferUs) return;
+    ESP_LOGI(kTag, "No input for %lld s; entering deep sleep", static_cast<long long>(idle_us / 1000000));
+    EnterManualSleep();
+}
+
+void Application::WaitForDisplayRefreshIdle() {
+    constexpr uint32_t kTimeoutMs = 60000;
+    if (!rawdraw_ui_manager_ || !rawdraw_ui_manager_->IsDisplayRefreshPending()) {
+        return;
+    }
+    ESP_LOGI(kTag, "Waiting for EPD refresh to finish before deep sleep");
+    const int64_t t0 = esp_timer_get_time();
+    const bool idle = rawdraw_ui_manager_->WaitForDisplayRefreshIdle(kTimeoutMs);
+    const int waited_ms = static_cast<int>((esp_timer_get_time() - t0) / 1000);
+    if (!idle || rawdraw_ui_manager_->IsDisplayRefreshPending()) {
+        ESP_LOGW(kTag, "EPD still busy after %d ms; sleeping anyway", waited_ms);
+    } else {
+        ESP_LOGI(kTag, "EPD idle after %d ms", waited_ms);
+    }
 }
 
 void Application::EnterManualSleep() {
-    ESP_LOGI(kTag, "Entering manual deep sleep; stopping local services and WiFi");
-    if (sleep_timer_ != nullptr) {
-        esp_timer_stop(sleep_timer_);
+    ESP_LOGI(kTag, "Entering deep sleep; stopping local services and WiFi");
+    ink::WeatherSpeaker::GetInstance().Stop();
+    if (rawdraw_ui_manager_) {
+        rawdraw_ui_manager_->BeginSleepTeardown();
     }
+    s_sleep_page = rawdraw_ui_manager_ ? static_cast<int>(rawdraw_ui_manager_->GetCurrentPage())
+                                       : static_cast<int>(ui::RawDrawPageId::Gallery);
     if (rawdraw_ui_manager_ && rawdraw_ui_manager_->IsHttpServerRunning()) {
-        rawdraw_ui_manager_->StopApTransferMode();
+        rawdraw_ui_manager_->StopHttpServersForSleep();
     }
     wifi_connected_.store(false, std::memory_order_release);
     esp_wifi_disconnect();
     esp_wifi_stop();
-    UpdateStatusBarForUi();
     vTaskDelay(pdMS_TO_TICKS(300));
+    WaitForDisplayRefreshIdle();
     esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(BOOT_BUTTON_GPIO), 0);
+    uint32_t programmed_s = 0;
+    const uint32_t wall_s = ArmTimerWakeup(&programmed_s);
+    ink::PowerDiag::BeforeDeepSleep(wall_s, programmed_s);
+    Board::GetInstance().PrepareForDeepSleep();
     esp_deep_sleep_start();
 }
 
@@ -534,6 +1014,9 @@ void Application::Run() {
         if (rawdraw_ui_manager_) {
             rawdraw_ui_manager_->PumpClockRefresh();
         }
+        CheckDailyBroadcast();
+        CheckWeatherRefresh();
+        CheckIdleSleep();
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
@@ -570,7 +1053,7 @@ bool Application::CanEnterSleepMode() const {
     return false;
 }
 
-void Application::UpdateStatusBarForUi() {
+void Application::UpdateStatusBarForUi(bool request_panel_refresh) {
     auto& board = Board::GetInstance();
     int battery_level = -1;
     bool charging = false;
@@ -595,7 +1078,13 @@ void Application::UpdateStatusBarForUi() {
                                      rawdraw_ui_manager_->IsLanHttpServerRunning()
                                          ? lan_ip
                                          : "");
-        rawdraw_ui_manager_->RequestActivePageRefresh();
+        // Quiet timer wakes refresh the panel once, when their own work is done.
+        // Sleep teardown must not queue a new ~20s four-color refresh before PowerEpdOff.
+        if (request_panel_refresh &&
+            !rawdraw_ui_manager_->IsSleepTeardown() &&
+            !woke_for_refresh_ && !woke_for_broadcast_ && !resleep_pending_.load()) {
+            rawdraw_ui_manager_->RequestActivePageRefresh();
+        }
     }
     return;
 }

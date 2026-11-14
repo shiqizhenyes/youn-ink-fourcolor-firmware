@@ -16,6 +16,8 @@
 #include "components/78__xiaozhi-fonts/include/fa_settings.h"  // for icon macros
 #include "lvgl.h"
 #include "settings.h"
+#include "settings_item_index.h"
+#include "common/photo_storage.h"
 
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -246,6 +248,8 @@ RawDrawUiManager::RawDrawUiManager()
     log_renderer_ = std::make_unique<rawdraw::LogRenderer>();
     yearprogress_renderer_ = std::make_unique<rawdraw::YearProgressRenderer>();
     calendar_renderer_ = std::make_unique<rawdraw::CalendarRenderer>();
+    ink_weather_renderer_ = std::make_unique<rawdraw::InkWeatherRenderer>();
+    ink_calendar_renderer_ = std::make_unique<rawdraw::InkCalendarRenderer>();
     font_debug_renderer_ = std::make_unique<rawdraw::FontDebugRenderer>();
     font_metrics_renderer_ = std::make_unique<rawdraw::FontMetricsRenderer>();
     ap_transfer_renderer_ = std::make_unique<rawdraw::ApTransferRenderer>();
@@ -305,7 +309,7 @@ RawDrawUiManager::RawDrawUiManager()
     });
     ap_transfer_server_->SetSettingsChangedCallback([this](int slideshow_interval_minutes) {
         SetGallerySlideshowIntervalMinutes(slideshow_interval_minutes);
-        UpdateSettingsItem(3, slideshow_interval_minutes <= 0
+        UpdateSettingsItem(kSettingsSlideshowIndex, slideshow_interval_minutes <= 0
             ? std::string("关闭")
             : std::to_string(slideshow_interval_minutes) + "min");
         RequestActivePageRefresh();
@@ -423,6 +427,10 @@ void RawDrawUiManager::Init(CustomLcdDisplay* lcd, RefreshCallback refresh_cb) {
     // Clear and render initial frame
     auto* fb = lcd_->GetFramebuffer();
     if (fb) {
+        {
+            std::lock_guard<std::mutex> lock(ui_state_mutex_);
+            status_bar_data_.page_title = GetPageTitle(current_page_);
+        }
         // Lock for thread safety
         auto* mutex = lcd_->GetMutex();
         if (mutex) xSemaphoreTake(mutex, portMAX_DELAY);
@@ -432,8 +440,11 @@ void RawDrawUiManager::Init(CustomLcdDisplay* lcd, RefreshCallback refresh_cb) {
 
         if (mutex) xSemaphoreGive(mutex);
 
-        // Trigger initial full refresh
-        TriggerRefresh(true);
+        if (skip_initial_refresh_) {
+            ESP_LOGI(kTag, "Initial panel refresh skipped");
+        } else {
+            TriggerRefresh(true);
+        }
     }
 
     ESP_LOGI(kTag, "RawDraw UI Manager initialized: %dx%d, page=%s",
@@ -542,7 +553,7 @@ rawdraw::PageRenderer* RawDrawUiManager::GetRendererForPage(RawDrawPageId page) 
         case RawDrawPageId::Wifi:     return wifi_renderer_.get();
         case RawDrawPageId::Settings: return settings_renderer_.get();
         case RawDrawPageId::Gallery:  return photo_gallery_renderer_.get();
-        case RawDrawPageId::Weather:  return weather_renderer_.get();
+        case RawDrawPageId::Weather:  return ink_weather_renderer_.get();
         case RawDrawPageId::News:     return news_renderer_.get();
         case RawDrawPageId::WeatherDetail: return weather_detail_renderer_.get();
         case RawDrawPageId::PhotoDetail: return photo_detail_renderer_.get();
@@ -550,7 +561,7 @@ rawdraw::PageRenderer* RawDrawUiManager::GetRendererForPage(RawDrawPageId page) 
         case RawDrawPageId::Almanac:  return almanac_renderer_.get();
         case RawDrawPageId::Log:      return log_renderer_.get();
         case RawDrawPageId::YearProgress: return yearprogress_renderer_.get();
-        case RawDrawPageId::Calendar:   return calendar_renderer_.get();
+        case RawDrawPageId::Calendar:   return ink_calendar_renderer_.get();
         case RawDrawPageId::FontDebug:  return font_debug_renderer_.get();
         case RawDrawPageId::FontMetrics: return font_metrics_renderer_.get();
         case RawDrawPageId::APTransfer: return ap_transfer_renderer_.get();
@@ -564,6 +575,15 @@ rawdraw::PageRenderer* RawDrawUiManager::GetActiveRenderer() const {
 
 bool RawDrawUiManager::IsDisplayRefreshPending() const {
     return lcd_ != nullptr && const_cast<CustomLcdDisplay*>(lcd_)->IsRefreshPending();
+}
+
+void RawDrawUiManager::BeginSleepTeardown() {
+    sleep_teardown_.store(true, std::memory_order_release);
+}
+
+bool RawDrawUiManager::WaitForDisplayRefreshIdle(uint32_t timeout_ms) {
+    if (!lcd_) return true;
+    return lcd_->WaitForRefreshIdle(timeout_ms);
 }
 
 void RawDrawUiManager::RefreshActivePage(bool urgent) {
@@ -644,9 +664,11 @@ bool RawDrawUiManager::TryDisplayCurrentPhotoRaw4Color() {
     return shown;
 }
 
-const std::array<RawDrawUiManager::QuickSwitchItem, 2>& RawDrawUiManager::GetQuickSwitchItems() {
-    static const std::array<QuickSwitchItem, 2> kItems = {{
+const std::array<RawDrawUiManager::QuickSwitchItem, 4>& RawDrawUiManager::GetQuickSwitchItems() {
+    static const std::array<QuickSwitchItem, 4> kItems = {{
         {RawDrawPageId::Gallery, "相册", FA_SETTINGS_IMAGE},
+        {RawDrawPageId::Weather, "天气", "\xef\x86\x85", &weather_icons_16},  // U+F185 sun
+        {RawDrawPageId::Calendar, "日历", FA_SETTINGS_CALENDAR},
         {RawDrawPageId::Settings, "设置", FA_SETTINGS_GEAR},
 #if 0
         // Hardware-only alignment pages are intentionally hidden from the
@@ -667,6 +689,12 @@ void RawDrawUiManager::StartApTransferMode() {
         ap_transfer_server_->Start();
     }
     SwitchPage(RawDrawPageId::APTransfer);
+}
+
+void RawDrawUiManager::StopHttpServersForSleep() {
+    if (ap_transfer_server_ && ap_transfer_server_->IsRunning()) {
+        ap_transfer_server_->Stop();
+    }
 }
 
 void RawDrawUiManager::StopApTransferMode() {
@@ -708,6 +736,9 @@ void RawDrawUiManager::StopLanHttpServer() {
 // ============================================================
 
 bool RawDrawUiManager::HandleInput(const rawdraw::ButtonEvent& event) {
+    if (sleep_teardown_.load(std::memory_order_acquire)) {
+        return true;
+    }
     const bool navigation_click = IsNavigationClick(event);
     if (navigation_click && input_refresh_locked_.load(std::memory_order_acquire)) {
         ESP_LOGI(kTag, "Navigation click ignored until current refresh completes: type=%d", event.type);
@@ -882,11 +913,8 @@ void RawDrawUiManager::RenderAll(uint8_t* fb, int width, int height) {
                 + "/" + std::to_string(ebook_renderer_->GetTotalPages());
         }
     }
-    if (current_page_ == RawDrawPageId::Calendar && calendar_renderer_) {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%d年%d月 ← →",
-                 calendar_renderer_->GetYear(), calendar_renderer_->GetMonth());
-        status_bar_data_.central_text = buf;
+    if (current_page_ == RawDrawPageId::Calendar && ink_calendar_renderer_) {
+        status_bar_data_.central_text = ink_calendar_renderer_->GetTitle();
     }
 
     // Draw the active page content in the content area
@@ -1036,15 +1064,17 @@ void RawDrawUiManager::DrawStatusBar(uint8_t* fb, int width, int height) {
         : status_bar_data_.page_title.c_str();
     const int right_safe = std::max(left_safe + 40, right_x - 2);
     const char* title_icon = nullptr;
+    const lv_font_t* title_icon_font = &fa_settings_16;
     for (const auto& item : GetQuickSwitchItems()) {
         if (item.page == current_page_) {
             title_icon = item.icon;
+            if (item.icon_font) title_icon_font = item.icon_font;
             break;
         }
     }
     const int title_icon_gap = (title_icon && title_icon[0] != '\0') ? 5 : 0;
     const int title_icon_w = (title_icon && title_icon[0] != '\0')
-        ? MeasureTextWidth(title_icon, &fa_settings_16) : 0;
+        ? MeasureTextWidth(title_icon, title_icon_font) : 0;
     const int title_max_w = std::max(44, right_safe - left_safe);
     const int text_max_w = std::max(20, title_max_w - title_icon_w - title_icon_gap);
     std::string display_title = FitTextToWidth(title, title_font, text_max_w);
@@ -1072,8 +1102,8 @@ void RawDrawUiManager::DrawStatusBar(uint8_t* fb, int width, int height) {
     }
     int title_text_x = title_x;
     if (title_icon_w > 0) {
-        const int icon_y = rawdraw::InkCenteredTextTopYInBox(&fa_settings_16, title_icon, 0, bar_height, 0);
-        DrawStyledText(fb, width, title_x, icon_y, title_icon, &fa_settings_16, text_style, height);
+        const int icon_y = rawdraw::InkCenteredTextTopYInBox(title_icon_font, title_icon, 0, bar_height, 0);
+        DrawStyledText(fb, width, title_x, icon_y, title_icon, title_icon_font, text_style, height);
         title_text_x += title_icon_w + title_icon_gap;
     }
     DrawStyledText(fb, width, title_text_x, title_y, display_title.c_str(), title_font, text_style);
@@ -1181,7 +1211,7 @@ void RawDrawUiManager::DrawQuickSwitchOverlay(uint8_t* fb, int width, int height
                                          Style::kBorderRadiusMD, row_style);
         }
         // Draw icon (if present) + label
-        const lv_font_t* icon_font = &fa_settings_16;
+        const lv_font_t* icon_font = items[i].icon_font ? items[i].icon_font : &fa_settings_16;
         const int icon_gap = 6;
         const int text_start_x = row_x + 18;
         const rawdraw::Color text_color = row_style.fg;
@@ -1278,7 +1308,7 @@ void RawDrawUiManager::RefreshRect(const rawdraw::Rect& rect, bool urgent) {
 // ============================================================
 
 void RawDrawUiManager::TriggerRefresh(bool urgent) {
-    if (!lcd_) return;
+    if (!lcd_ || sleep_teardown_.load(std::memory_order_acquire)) return;
 
     // Use the framebuffer's dirty tracking
     // Mark the entire screen as dirty since we did a full clear + render
@@ -1319,14 +1349,56 @@ bool RawDrawUiManager::ShowPhotoById(const std::string& photo_id) {
     if (!photo_gallery_renderer_ || photo_id.empty()) {
         return false;
     }
-    photo_gallery_renderer_->RefreshPhotoList();
-    if (!photo_gallery_renderer_->SetSelectedById(photo_id.c_str())) {
+    if (!photo_exists(photo_id.c_str())) {
         ESP_LOGW(kTag, "ShowPhotoById failed: id=%s not found", photo_id.c_str());
         return false;
     }
+    // HTTP runs on its own task. Queue the id and let the main loop wait until
+    // the panel is idle, then enter gallery fullscreen and restart slideshow.
+    {
+        std::lock_guard<std::mutex> lock(pending_show_mutex_);
+        pending_show_photo_id_ = photo_id;
+    }
+    ESP_LOGI(kTag, "Queued gallery show photo id=%s wait_idle=%d",
+             photo_id.c_str(), IsDisplayRefreshPending() ? 1 : 0);
+    return true;
+}
+
+bool RawDrawUiManager::ApplyQueuedShowPhoto(const std::string& photo_id) {
+    if (!photo_gallery_renderer_ || photo_id.empty()) {
+        return false;
+    }
+
+    if (quick_switch_open_) {
+        quick_switch_open_ = false;
+        quick_switch_backing_.clear();
+    }
+
+    if (current_page_ != RawDrawPageId::Gallery) {
+        InitRenderer(RawDrawPageId::Gallery);
+        current_page_ = RawDrawPageId::Gallery;
+        {
+            std::lock_guard<std::mutex> lock(ui_state_mutex_);
+            status_bar_data_.page_title = GetPageTitle(RawDrawPageId::Gallery);
+        }
+        if (page_switch_cb_) {
+            page_switch_cb_(RawDrawPageId::Gallery);
+        }
+    } else {
+        photo_gallery_renderer_->RefreshPhotoList();
+    }
+
+    if (!photo_gallery_renderer_->SetSelectedById(photo_id.c_str())) {
+        ESP_LOGW(kTag, "ApplyQueuedShowPhoto failed: id=%s not found", photo_id.c_str());
+        return false;
+    }
+
     photo_gallery_renderer_->EnterFullscreenMode();
-    SwitchPage(RawDrawPageId::Gallery);
-    ESP_LOGI(kTag, "Show photo fullscreen from HTTP: id=%s", photo_id.c_str());
+    photo_gallery_renderer_->MarkFullRefresh();
+    RefreshActivePage(false);
+    ArmGallerySlideshowTimer();
+    ESP_LOGI(kTag, "Show photo fullscreen id=%s slideshow_interval=%d min",
+             photo_id.c_str(), gallery_slideshow_interval_minutes_);
     return true;
 }
 
@@ -1458,9 +1530,55 @@ void RawDrawUiManager::OnTransientRefreshTimer(void* arg) {
 }
 
 void RawDrawUiManager::PumpClockRefresh() {
+    if (sleep_teardown_.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    std::string show_id;
+    {
+        std::lock_guard<std::mutex> lock(pending_show_mutex_);
+        show_id = pending_show_photo_id_;
+    }
+    if (!show_id.empty()) {
+        if (IsDisplayRefreshPending()) {
+            ESP_LOGI(kTag, "Defer gallery show until EPD idle: id=%s", show_id.c_str());
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(pending_show_mutex_);
+            show_id = std::move(pending_show_photo_id_);
+            pending_show_photo_id_.clear();
+        }
+        if (!show_id.empty()) {
+            gallery_slideshow_pending_.store(false, std::memory_order_release);
+            active_page_refresh_pending_.store(false, std::memory_order_release);
+            transient_refresh_pending_.store(false, std::memory_order_release);
+            ApplyQueuedShowPhoto(show_id);
+            if (!kEnableMinuteClockRefresh) {
+                clock_refresh_pending_.store(false, std::memory_order_release);
+            }
+            return;
+        }
+    }
+
     const bool page_pending = active_page_refresh_pending_.exchange(false, std::memory_order_acq_rel);
     const bool transient_pending = transient_refresh_pending_.exchange(false, std::memory_order_acq_rel);
     const bool slideshow_pending = gallery_slideshow_pending_.exchange(false, std::memory_order_acq_rel);
+    if (IsDisplayRefreshPending() && (page_pending || transient_pending || slideshow_pending)) {
+        if (page_pending) {
+            active_page_refresh_pending_.store(true, std::memory_order_release);
+        }
+        if (transient_pending) {
+            transient_refresh_pending_.store(true, std::memory_order_release);
+        }
+        if (slideshow_pending) {
+            gallery_slideshow_pending_.store(true, std::memory_order_release);
+        }
+        if (!kEnableMinuteClockRefresh) {
+            clock_refresh_pending_.store(false, std::memory_order_release);
+        }
+        return;
+    }
     if (slideshow_pending) {
         AdvanceGallerySlideshow();
     }

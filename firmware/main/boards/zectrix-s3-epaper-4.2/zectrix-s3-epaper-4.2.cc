@@ -190,6 +190,21 @@ public:
         return ok;
     }
 
+    bool GetRtcTime(time_t& epoch, bool& valid) override {
+        valid = false;
+        return rtc_ != nullptr && rtc_->GetEpoch(epoch, valid);
+    }
+
+    bool SetRtcTime(time_t epoch) override {
+        return rtc_ != nullptr && rtc_->SetEpoch(epoch);
+    }
+
+    bool GetBatteryVoltage(uint16_t& mv, uint8_t& percent, bool& power_present) override {
+        charge_status_.Tick(GetNowMs());
+        power_present = charge_status_.Get().power_present;
+        return ReadBatteryStatus(mv, percent);
+    }
+
     void SetPowerSaveLevel(PowerSaveLevel level) override {
         switch (level) {
             case PowerSaveLevel::LOW_POWER:
@@ -257,12 +272,61 @@ public:
         }
     }
 
+    void PrepareForDeepSleep() override {
+        // NFC VCC comes straight from its GPIO; keep it up so phones can still
+        // read and write the tag while the MCU sleeps.
+        if (nfc_ != nullptr) {
+            const gpio_num_t nfc_pwr = static_cast<gpio_num_t>(NFC_PWR_GPIO);
+            gpio_hold_dis(nfc_pwr);
+            gpio_set_level(nfc_pwr, 1);
+            gpio_hold_en(nfc_pwr);
+        }
+
+        // AVDD_3V3 feeds the ES8311, the amp, the mic and the I2C pull-ups.
+        // Float the I2S/I2C pins first so they do not back-power the codec.
+        const gpio_num_t audio_bus_pins[] = {
+            AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS,
+            AUDIO_I2S_GPIO_DIN,  AUDIO_I2S_GPIO_DOUT,
+            AUDIO_CODEC_I2C_SDA_PIN, AUDIO_CODEC_I2C_SCL_PIN,
+        };
+        gpio_config_t float_cfg = {};
+        float_cfg.mode = GPIO_MODE_INPUT;
+        float_cfg.pull_up_en = GPIO_PULLUP_DISABLE;
+        float_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        float_cfg.intr_type = GPIO_INTR_DISABLE;
+        for (gpio_num_t pin : audio_bus_pins) {
+            gpio_hold_dis(pin);
+            float_cfg.pin_bit_mask = 1ULL << pin;
+            gpio_config(&float_cfg);
+            gpio_hold_en(pin);
+        }
+
+        if (power_ != nullptr) {
+            power_->PowerAmpOff();
+            power_->PowerAudioOff();
+            power_->PowerEpdOff();
+            power_->LedOff();
+            // PWR_ON latch: dropping it cuts the battery and powers the board off.
+            power_->VbatPowerOn();
+        }
+        ESP_LOGI(kTag, "Peripheral rails off for deep sleep (NFC kept powered)");
+    }
+
 private:
     static int64_t GetNowMs() {
         return esp_timer_get_time() / 1000;
     }
 
     void InitializePower() {
+        // Pins floated and held by PrepareForDeepSleep() stay latched across the wake.
+        const gpio_num_t audio_bus_pins[] = {
+            AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS,
+            AUDIO_I2S_GPIO_DIN,  AUDIO_I2S_GPIO_DOUT,
+            AUDIO_CODEC_I2C_SDA_PIN, AUDIO_CODEC_I2C_SCL_PIN,
+        };
+        for (gpio_num_t pin : audio_bus_pins) {
+            gpio_hold_dis(pin);
+        }
         power_ = std::make_unique<BoardPowerBsp>(EPD_PWR_PIN,
                                                  Audio_PWR_PIN,
                                                  Audio_AMP_PIN,
@@ -368,6 +432,12 @@ private:
                 return;
             }
         });
+        up_button_.OnDoubleClick([]() {
+            auto& app = Application::GetInstance();
+            if (app.GetRawDrawUiManager()) {
+                app.OnUpDoubleClick();
+            }
+        });
 
         up_button_.OnPressUp([]() {
             const int64_t started_at = s_up_press_down_ms.exchange(-1);
@@ -451,6 +521,12 @@ private:
                 return;
             }
             FactoryTestService::Instance().HandleButton(FactoryTestButton::kConfirmClick);
+        });
+        confirm_button_.OnDoubleClick([]() {
+            auto& app = Application::GetInstance();
+            if (app.GetRawDrawUiManager()) {
+                app.OnBootDoubleClick();
+            }
         });
 
         // CONFIRM (BOOT) long press → voice PTT or factory test
