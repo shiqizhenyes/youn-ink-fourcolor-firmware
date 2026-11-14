@@ -13,6 +13,7 @@ idf_component_register(
         "src/inksight/inksight_cjk_16.c"
         "src/inksight/inksight_temp_48.c"
         "src/inksight/inksight_weather_icons.c"
+        "src/inksight/inksight_almanac_ornaments.c"
     INCLUDE_DIRS
         "include"
     PRIV_REQUIRES

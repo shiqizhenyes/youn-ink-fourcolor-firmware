@@ -312,6 +312,14 @@ void DrawText(uint8_t* fb, int width, int x, int y, const char* text,
 void DrawIcon(uint8_t* fb, int width, int x, int y, const char* icon_code,
               const lv_font_t* font, Color color = BLACK);
 
+/**
+ * @brief Draw a 1bpp bitmap (MSB first, rows padded to whole bytes)
+ *
+ * Set bits are painted with color; clear bits leave the framebuffer untouched.
+ */
+void DrawMonoBitmap(uint8_t* fb, int width, int x, int y, int w, int h,
+                    const uint8_t* bits, Color color = BLACK);
+
 // ============================================================
 // Progress/Status Indicators
 // ============================================================

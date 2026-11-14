@@ -417,6 +417,20 @@ void DrawIcon(uint8_t* fb, int width, int x, int y, const char* icon_code,
     DrawText(fb, width, x, y, icon_code, font, color);
 }
 
+void DrawMonoBitmap(uint8_t* fb, int width, int x, int y, int w, int h,
+                    const uint8_t* bits, Color color) {
+    if (!fb || !bits || w <= 0 || h <= 0) return;
+    const int stride = (w + 7) / 8;
+    for (int row = 0; row < h; ++row) {
+        const uint8_t* line = bits + row * stride;
+        for (int col = 0; col < w; ++col) {
+            if (line[col >> 3] & (0x80 >> (col & 7))) {
+                set_pixel(fb, width, x + col, y + row, color);
+            }
+        }
+    }
+}
+
 // ============================================================
 // Progress Bar
 // ============================================================
