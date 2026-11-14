@@ -88,6 +88,7 @@ void WifiConfigurationAp::SetPassword(const std::string &password)
 
 void WifiConfigurationAp::Start()
 {
+    exit_scheduled_.store(false);
     // Register event handlers
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
                                                         ESP_EVENT_ANY_ID,
@@ -467,6 +468,9 @@ void WifiConfigurationAp::StartWebServer()
             httpd_resp_set_type(req, "application/json");
             httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_send(req, "{\"success\":true}", HTTPD_RESP_USE_STRLEN);
+            // Credentials are saved. Do not wait for /done.html to POST /exit —
+            // AP channel switch + STA disconnect often drops that follow-up.
+            this_->ScheduleExitConfigMode();
             return ESP_OK;
         },
         .user_ctx = this
@@ -501,18 +505,7 @@ void WifiConfigurationAp::StartWebServer()
             httpd_resp_send(req, "{\"success\":true}", HTTPD_RESP_USE_STRLEN);
             
             // 延迟调用回调，确保HTTP响应完全发送
-            ESP_LOGI(TAG, "Exiting config mode...");
-            xTaskCreate([](void *ctx) {
-                // 等待200ms确保HTTP响应完全发送
-                vTaskDelay(pdMS_TO_TICKS(200));
-                
-                auto* self = static_cast<WifiConfigurationAp*>(ctx);
-                // 通知回调退出配网模式
-                if (self->on_exit_requested_) {
-                    self->on_exit_requested_();
-                }
-                vTaskDelete(NULL);
-            }, "exit_config_task", 8192, this_, 5, NULL);
+            this_->ScheduleExitConfigMode();
             
             return ESP_OK;
         },
@@ -776,6 +769,23 @@ void WifiConfigurationAp::Save(const std::string &ssid, const std::string &passw
 void WifiConfigurationAp::OnExitRequested(std::function<void()> callback)
 {
     on_exit_requested_ = callback;
+}
+
+void WifiConfigurationAp::ScheduleExitConfigMode()
+{
+    bool expected = false;
+    if (!exit_scheduled_.compare_exchange_strong(expected, true)) {
+        return;
+    }
+    ESP_LOGI(TAG, "Exiting config mode...");
+    xTaskCreate([](void *ctx) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+        auto* self = static_cast<WifiConfigurationAp*>(ctx);
+        if (self->on_exit_requested_) {
+            self->on_exit_requested_();
+        }
+        vTaskDelete(NULL);
+    }, "exit_config_task", 8192, this, 5, NULL);
 }
 
 void WifiConfigurationAp::WifiEventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)

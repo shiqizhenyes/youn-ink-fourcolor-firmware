@@ -6,6 +6,7 @@
 #include <mutex>
 #include <memory>
 #include <functional>
+#include <atomic>
 
 #include <esp_http_server.h>
 #include <esp_event.h>
@@ -54,6 +55,7 @@ public:
      * This is called when user requests to exit config mode (e.g., via /exit endpoint)
      */
     void OnExitRequested(std::function<void()> callback);
+    void ScheduleExitConfigMode();
 
 private:
     std::mutex mutex_;
@@ -67,6 +69,7 @@ private:
     esp_event_handler_instance_t instance_got_ip_;
     esp_timer_handle_t scan_timer_ = nullptr;
     bool is_connecting_ = false;
+    std::atomic<bool> exit_scheduled_{false};
     esp_netif_t* ap_netif_ = nullptr;
     esp_netif_t* sta_netif_ = nullptr;
     std::vector<wifi_ap_record_t> ap_records_;
