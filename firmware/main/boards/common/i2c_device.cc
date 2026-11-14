@@ -73,6 +73,32 @@ uint8_t I2cDevice::ReadReg(uint8_t reg) {
     return buffer[0];
 }
 
+esp_err_t I2cDevice::TryReadRegs(uint8_t reg, uint8_t* buffer, size_t length) {
+    ScopedI2cBusLock bus_lock("I2cDevice::TryReadRegs");
+    if (!bus_lock.locked()) {
+        return bus_lock.status();
+    }
+    BoardI2cForcePowerOn();
+    return i2c_master_transmit_receive(i2c_device_, &reg, 1, buffer, length, kI2cTimeoutMs);
+}
+
+esp_err_t I2cDevice::TryWriteRegs(uint8_t reg, const uint8_t* data, size_t length) {
+    uint8_t buffer[16];
+    if (length + 1 > sizeof(buffer)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    buffer[0] = reg;
+    for (size_t i = 0; i < length; ++i) {
+        buffer[i + 1] = data[i];
+    }
+    ScopedI2cBusLock bus_lock("I2cDevice::TryWriteRegs");
+    if (!bus_lock.locked()) {
+        return bus_lock.status();
+    }
+    BoardI2cForcePowerOn();
+    return i2c_master_transmit(i2c_device_, buffer, length + 1, kI2cTimeoutMs);
+}
+
 void I2cDevice::ReadRegs(uint8_t reg, uint8_t* buffer, size_t length) {
     ScopedI2cBusLock bus_lock("I2cDevice::ReadRegs");
     ESP_ERROR_CHECK(bus_lock.status());

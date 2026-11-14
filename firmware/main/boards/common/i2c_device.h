@@ -17,6 +17,9 @@ protected:
     void WriteReg(uint8_t reg, uint8_t value);
     uint8_t ReadReg(uint8_t reg);
     void ReadRegs(uint8_t reg, uint8_t* buffer, size_t length);
+    // Non-aborting variants for callers that can tolerate a missing device.
+    esp_err_t TryReadRegs(uint8_t reg, uint8_t* buffer, size_t length);
+    esp_err_t TryWriteRegs(uint8_t reg, const uint8_t* data, size_t length);
 };
 
 #endif // I2C_DEVICE_H

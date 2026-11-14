@@ -17,6 +17,10 @@ public:
     bool Init(gpio_num_t int_gpio);
     bool SetTime(const tm& local_tm);
     bool GetTime(tm& out_local_tm);
+    // Epoch helpers keep the chip in UTC; valid is false when the VL flag says the
+    // oscillator stopped since the last write.
+    bool GetEpoch(time_t& epoch, bool& valid);
+    bool SetEpoch(time_t epoch);
 
     bool SetAlarm(const tm& target_local_tm);
     bool DisableAlarm();

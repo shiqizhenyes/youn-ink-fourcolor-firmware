@@ -1,6 +1,8 @@
 #ifndef BOARD_H
 #define BOARD_H
 
+#include <cstdint>
+#include <ctime>
 #include <string>
 #include <functional>
 
@@ -76,9 +78,18 @@ public:
     virtual bool IsFactoryTestMode() const { return false; }
     virtual void EnterFactoryTestFlow() {}
     virtual void FlashActivityLed() {}
+    // Called right before esp_deep_sleep_start(); cut peripheral rails here.
+    virtual void PrepareForDeepSleep() {}
     virtual void SetNetworkEventCallback(NetworkEventCallback callback) { (void)callback; }
     virtual const char* GetNetworkStateIcon() = 0;
     virtual bool GetBatteryLevel(int &level, bool& charging, bool& discharging);
+    // External battery-backed RTC; valid is false when the chip reports lost time.
+    virtual bool GetRtcTime(time_t& epoch, bool& valid) { (void)epoch; valid = false; return false; }
+    virtual bool SetRtcTime(time_t epoch) { (void)epoch; return false; }
+    // power_present is true when USB supplies the board (battery readings are then not a drain).
+    virtual bool GetBatteryVoltage(uint16_t& mv, uint8_t& percent, bool& power_present) {
+        mv = 0; percent = 0; power_present = false; return false;
+    }
     virtual std::string GetSystemInfoJson();
     virtual void SetPowerSaveLevel(PowerSaveLevel level) = 0;
     virtual std::string GetBoardJson() = 0;

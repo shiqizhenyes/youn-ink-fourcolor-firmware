@@ -25,6 +25,7 @@ constexpr uint8_t kCtrl2TimerFlag      = 1 << 2; // TF
 constexpr uint8_t kCtrl2AlarmIntEnable = 1 << 1; // AIE
 constexpr uint8_t kCtrl2TimerIntEnable = 1 << 0; // TIE
 constexpr uint8_t kAlarmDisableBit = 1 << 7;
+constexpr uint8_t kSecondsVlBit = 1 << 7;
 constexpr uint8_t kTimerEnable = 1 << 7;
 constexpr uint8_t kTimerFreq1Hz = 0x02;
 
@@ -78,6 +79,59 @@ bool RtcPcf8563::GetTime(tm& out_local_tm) {
     out_local_tm.tm_mon = FromBcd(buf[5] & 0x1F) - 1;
     out_local_tm.tm_year = FromBcd(buf[6]) + 100;
 
+    return true;
+}
+
+bool RtcPcf8563::GetEpoch(time_t& epoch, bool& valid) {
+    uint8_t buf[7] = {};
+    esp_err_t ret = TryReadRegs(kRegSeconds, buf, sizeof(buf));
+    if (ret != ESP_OK) {
+        ESP_LOGW(kTag, "GetEpoch read failed: %s", esp_err_to_name(ret));
+        valid = false;
+        return false;
+    }
+    valid = (buf[0] & kSecondsVlBit) == 0;
+
+    const int year = FromBcd(buf[6]) + 2000;
+    const int month = FromBcd(buf[5] & 0x1F);
+    const int day = FromBcd(buf[3] & 0x3F);
+    if (month < 1 || month > 12 || day < 1 || day > 31) {
+        valid = false;
+        epoch = 0;
+        return true;
+    }
+    // Days from civil (Howard Hinnant), avoids depending on TZ/timegm.
+    const int y = year - (month <= 2 ? 1 : 0);
+    const int era = y / 400;
+    const int yoe = y - era * 400;
+    const int mp = (month + 9) % 12;
+    const int doy = (153 * mp + 2) / 5 + day - 1;
+    const int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    const int64_t days = static_cast<int64_t>(era) * 146097 + doe - 719468;
+    epoch = static_cast<time_t>(days * 86400 +
+                                FromBcd(buf[2] & 0x3F) * 3600 +
+                                FromBcd(buf[1] & 0x7F) * 60 +
+                                FromBcd(buf[0] & 0x7F));
+    return true;
+}
+
+bool RtcPcf8563::SetEpoch(time_t epoch) {
+    tm utc = {};
+    gmtime_r(&epoch, &utc);
+    const uint8_t regs[7] = {
+        static_cast<uint8_t>(ToBcd(utc.tm_sec) & 0x7F),  // clears VL
+        static_cast<uint8_t>(ToBcd(utc.tm_min) & 0x7F),
+        static_cast<uint8_t>(ToBcd(utc.tm_hour) & 0x3F),
+        static_cast<uint8_t>(ToBcd(utc.tm_mday) & 0x3F),
+        static_cast<uint8_t>(ToBcd(utc.tm_wday) & 0x07),
+        static_cast<uint8_t>(ToBcd(utc.tm_mon + 1) & 0x1F),
+        ToBcd(utc.tm_year % 100),
+    };
+    esp_err_t ret = TryWriteRegs(kRegSeconds, regs, sizeof(regs));
+    if (ret != ESP_OK) {
+        ESP_LOGW(kTag, "SetEpoch write failed: %s", esp_err_to_name(ret));
+        return false;
+    }
     return true;
 }
 
