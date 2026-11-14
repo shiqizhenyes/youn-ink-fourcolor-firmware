@@ -1,0 +1,96 @@
+<header>
+  <a class="brand" href="/">ZECTRIX <span class="brand-sub" id="endpoint"></span></a>
+  <ul class="nav" id="topmenu">
+    <li class="dropdown" data-chrome="lan" data-nav="status">
+      <a class="menu" href="/#status">状态</a>
+      <ul class="dropdown-menu">
+        <li><a href="/#status" data-route="status">概览</a></li>
+      </ul>
+    </li>
+    <li class="dropdown" data-chrome="lan" data-nav="photos">
+      <a class="menu" href="/#photos">相册</a>
+      <ul class="dropdown-menu">
+        <li><a href="/#photos" data-route="photos">图库</a></li>
+      </ul>
+    </li>
+    <li class="dropdown" data-chrome="lan" data-nav="system">
+      <a class="menu" href="/#system">系统</a>
+      <ul class="dropdown-menu">
+        <li><a href="/#system" data-route="system">设置</a></li>
+      </ul>
+    </li>
+    <li class="dropdown" data-chrome="lan" data-nav="network">
+      <a class="menu" href="/#wireless">网络</a>
+      <ul class="dropdown-menu">
+        <li><a href="/#wireless" data-route="wireless">无线</a></li>
+        <li><a href="/#interfaces" data-route="interfaces">接口</a></li>
+      </ul>
+    </li>
+    <li class="dropdown" data-chrome="captive" data-nav="network">
+      <a class="menu" href="/" data-lang="network_mode">网络</a>
+      <ul class="dropdown-menu">
+        <li><a href="/#wifi" data-route="wifi" data-lang="menu_wireless">无线</a></li>
+        <li><a href="/#sonic" data-route="sonic" data-lang="menu_sonic">声波配网</a></li>
+        <li><a href="/#advanced" data-route="advanced" data-lang="advanced_tab">高级</a></li>
+      </ul>
+    </li>
+    <li class="dropdown" data-nav="theme">
+      <a class="menu" href="#" data-lang="menu_theme">主题</a>
+      <ul class="dropdown-menu">
+        <li><a href="#" data-theme-set="luci" data-lang="theme_luci">LuCI</a></li>
+        <li><a href="#" data-theme-set="ink" data-lang="theme_ink">墨水屏</a></li>
+      </ul>
+    </li>
+    <li class="dropdown" data-chrome="lan" data-nav="developer">
+      <a class="menu" href="/developer/ble">开发者选项</a>
+      <ul class="dropdown-menu">
+        <li><a href="/developer/ble" data-route="ble">BLE 面板</a></li>
+        <li><a href="/developer/layout" data-route="layout">布局调整器</a></li>
+      </ul>
+    </li>
+  </ul>
+  <div id="indicators" class="pull-right">
+    <button type="button" class="cbi-button" id="helpBtn" data-chrome="lan">说明</button>
+    <span class="pill" data-chrome="lan">400x300</span>
+    <select id="language" class="lang-select" data-chrome="captive">
+      <option value="ar-SA">العربية</option>
+      <option value="bg-BG">Български</option>
+      <option value="ca-ES">Català</option>
+      <option value="cs-CZ">Čeština</option>
+      <option value="da-DK">Dansk</option>
+      <option value="de-DE">Deutsch</option>
+      <option value="el-GR">Ελληνικά</option>
+      <option value="en-US">English</option>
+      <option value="es-ES">Español</option>
+      <option value="fa-IR">فارسی</option>
+      <option value="fi-FI">Suomi</option>
+      <option value="fil-PH">Filipino</option>
+      <option value="fr-FR">Français</option>
+      <option value="he-IL">עברית</option>
+      <option value="hi-IN">हिन्दी</option>
+      <option value="hr-HR">Hrvatski</option>
+      <option value="hu-HU">Magyar</option>
+      <option value="id-ID">Bahasa Indonesia</option>
+      <option value="it-IT">Italiano</option>
+      <option value="ja-JP">日本語</option>
+      <option value="ko-KR">한국어</option>
+      <option value="ms-MY">Bahasa Melayu</option>
+      <option value="nb-NO">Norsk</option>
+      <option value="nl-NL">Nederlands</option>
+      <option value="pl-PL">Polski</option>
+      <option value="pt-PT">Português</option>
+      <option value="ro-RO">Română</option>
+      <option value="ru-RU">Русский</option>
+      <option value="sk-SK">Slovenčina</option>
+      <option value="sl-SI">Slovenščina</option>
+      <option value="sr-RS">Српски</option>
+      <option value="sv-SE">Svenska</option>
+      <option value="th-TH">ไทย</option>
+      <option value="tr-TR">Türkçe</option>
+      <option value="uk-UA">Українська</option>
+      <option value="vi-VN">Tiếng Việt</option>
+      <option value="zh-CN" selected>简体中文</option>
+      <option value="zh-TW">繁體中文</option>
+    </select>
+  </div>
+</header>

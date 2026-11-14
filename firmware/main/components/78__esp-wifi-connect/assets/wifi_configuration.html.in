@@ -1,286 +1,86 @@
 <!DOCTYPE html>
-<html>
+<html data-chrome="captive">
 <head>
+<script>(function(){try{var t=localStorage.getItem('inkscreen-web-theme');document.documentElement.setAttribute('data-theme',t==='ink'?'ink':'luci');}catch(e){document.documentElement.setAttribute('data-theme','luci');}})();</script>
     <title>Network Configuration</title>
     <meta charset="utf-8">
     <meta http-equiv="Content-Security-Policy" content="referrer no-referrer">
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
     <style type="text/css">
-        /* ========== Base Styles ========== */
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            background-color: #f0f0f0;
-        }
-
-        /* ========== Form Elements ========== */
-        label {
-            display: block;
-            margin-bottom: 5px;
-        }
-        input {
-            width: 100%;
-            padding: 5px;
-            box-sizing: border-box;
-            border: 1px solid #ccc;
-            border-radius: 3px;
-        }
-        input[type="submit"] {
-            background-color: #007bff;
-            color: #fff;
-            border: none;
-            border-radius: 3px;
-            padding: 10px;
-            cursor: pointer;
-        }
-        input[type="submit"]:hover {
-            background-color: #0056b3;
-        }
-        input[type="submit"]:disabled {
-            background-color: #ccc;
-            cursor: not-allowed;
-        }
-        #remember_bssid, #sleep_mode {
-            width: auto;
-        }
-
-        /* ========== AP List Styles ========== */
-        #ap_list {
-            margin-top: 20px;
-            border-top: 1px solid #ccc;
-            padding-top: 10px;
-        }
-        #ap_list .scanning {
-            font-style: italic;
-            color: #666;
-        }
-        #ap_list a {
-            display: block;
-            margin-top: 5px;
-            color: #007bff;
-            text-decoration: none;
-        }
-        #ap_list a:hover {
-            text-decoration: underline;
-        }
-
-        /* ========== Language Switcher ========== */
-        .language-switch {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-        }
-        .language-switch select {
-            padding: 5px;
-            border-radius: 3px;
-            border: 1px solid #ccc;
-        }
-
-        /* ========== Tab Styles ========== */
-        .tabs {
-            display: flex;
-            margin-top: 20px;
-            margin-bottom: 0;
-            padding-left: 20px;
-            border-bottom: 1px solid #ccc;
-        }
-        .tab {
-            padding: 10px 20px;
-            cursor: pointer;
-            border: 1px solid #ccc;
-            border-bottom: none;
-            border-radius: 5px 5px 0 0;
-            margin-right: 5px;
-            background-color: #f0f0f0;
-            position: relative;
-            top: 1px;
-        }
-        .tab.active {
-            background-color: #fff;
-        }
-        .tab-content {
-            display: none;
-            border-top: none;
-            padding: 20px;
-            background-color: #fff;
-        }
-        .tab-content.active {
-            display: block;
-        }
-
-        /* ========== Toast Message Styles ========== */
-        .toast {
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background-color: rgba(0, 0, 0, 0.8);
-            color: white;
-            padding: 15px 30px;
-            border-radius: 8px;
-            z-index: 1000;
-            opacity: 0;
-            transition: opacity 0.3s ease-in-out;
-            min-width: 200px;
-            text-align: center;
-        }
-        .toast.show {
-            opacity: 1;
-        }
-
-        /* ========== Loading Spinner Styles ========== */
-        .loading-overlay {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.5);
-            z-index: 2000;
-            justify-content: center;
-            align-items: center;
-        }
-        .loading-overlay.show {
-            display: flex;
-        }
-        .loading-spinner {
-            width: 60px;
-            height: 60px;
-            border: 6px solid rgba(255, 255, 255, 0.3);
-            border-top-color: #ffffff;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-        .loading-content {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 20px;
-        }
-        .loading-text {
-            color: white;
-            font-size: 18px;
-            font-weight: bold;
-        }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
+__LUCI_LITE_CSS__
+.tab-content { display: none; }
+.tab-content.active { display: block; }
     </style>
 </head>
 <body>
-    <!-- Toast notification -->
     <div class="toast" id="toast"></div>
-    
-    <!-- Loading overlay -->
     <div class="loading-overlay" id="loadingOverlay">
         <div class="loading-content">
             <div class="loading-spinner"></div>
             <div class="loading-text" data-lang="connecting">Connecting...</div>
         </div>
     </div>
-    
-    <!-- Language switcher -->
-    <div class="language-switch">
-        <select id="language" onchange="changeLanguage()">
-            <option value="ar-SA">العربية</option>
-            <option value="bg-BG">Български</option>
-            <option value="ca-ES">Català</option>
-            <option value="cs-CZ">Čeština</option>
-            <option value="da-DK">Dansk</option>
-            <option value="de-DE">Deutsch</option>
-            <option value="el-GR">Ελληνικά</option>
-            <option value="en-US">English</option>
-            <option value="es-ES">Español</option>
-            <option value="fa-IR">فارسی</option>
-            <option value="fi-FI">Suomi</option>
-            <option value="fil-PH">Filipino</option>
-            <option value="fr-FR">Français</option>
-            <option value="he-IL">עברית</option>
-            <option value="hi-IN">हिन्दी</option>
-            <option value="hr-HR">Hrvatski</option>
-            <option value="hu-HU">Magyar</option>
-            <option value="id-ID">Bahasa Indonesia</option>
-            <option value="it-IT">Italiano</option>
-            <option value="ja-JP">日本語</option>
-            <option value="ko-KR">한국어</option>
-            <option value="ms-MY">Bahasa Melayu</option>
-            <option value="nb-NO">Norsk</option>
-            <option value="nl-NL">Nederlands</option>
-            <option value="pl-PL">Polski</option>
-            <option value="pt-PT">Português</option>
-            <option value="ro-RO">Română</option>
-            <option value="ru-RU">Русский</option>
-            <option value="sk-SK">Slovenčina</option>
-            <option value="sl-SI">Slovenščina</option>
-            <option value="sr-RS">Српски</option>
-            <option value="sv-SE">Svenska</option>
-            <option value="th-TH">ไทย</option>
-            <option value="tr-TR">Türkçe</option>
-            <option value="uk-UA">Українська</option>
-            <option value="vi-VN">Tiếng Việt</option>
-            <option value="zh-CN">简体中文</option>
-            <option value="zh-TW">繁體中文</option>
-        </select>
-    </div>
-    
-    <!-- Tabs -->
-    <div class="tabs">
-        <div class="tab active" onclick="switchTab('wifi')" data-lang="wifi_tab">Wi-Fi Config</div>
-        <div class="tab" onclick="switchTab('advanced')" data-lang="advanced_tab">Advanced</div>
-    </div>
-
-    <!-- Wi-Fi Configuration Tab -->
+__LUCI_HEADER__
+<div id="maincontent" class="container">
     <div id="wifi-tab" class="tab-content active">
-        <!-- Saved Wi-Fi List -->
-        <div id="saved_list_container" style="display: none;">
-            <h3 data-lang="saved_wifi">Saved Wi-Fi</h3>
-            <ul id="saved_list">
-                <li><span>SSID</span></li>
-            </ul>
-        </div>
-        
-        <!-- New Wi-Fi Connection -->
-        <div>
-            <h3 data-lang="new_wifi">New Wi-Fi</h3>
-            <p class="error" style="color: red; text-align: center;" id="error"></p>
-            <form action="/submit" method="post" onsubmit="submitForm(event)">
-                <p>
-                    <label for="ssid">SSID:</label>
-                    <input type="text" id="ssid" name="ssid" required readonly>
-                </p>
-                <p>
-                    <label for="password" data-lang="password">Password:</label>
-                    <input type="password" id="password" name="password">
-                </p>
-                <p style="text-align: center;">
-                    <input type="submit" value="Connect" id="button" data-lang-value="connect">
-                </p>
-            </form>
-            <p id="ap_list"></p>
+        <div class="cbi-map">
+            <h2 data-lang="wifi_tab">Wi-Fi Config</h2>
+            <div id="saved_list_container" class="cbi-section" style="display: none;">
+                <h3 data-lang="saved_wifi">Saved Wi-Fi</h3>
+                <div id="saved_list" class="table cbi-section-table"></div>
+            </div>
+            <div class="cbi-section">
+                <h3 data-lang="new_wifi">New Wi-Fi</h3>
+                <p class="alert-message error" id="error" style="display:none"></p>
+                <form action="/submit" method="post" onsubmit="submitForm(event)">
+                    <div class="cbi-value">
+                        <label class="cbi-value-title" for="ssid">SSID</label>
+                        <div class="cbi-value-field"><input type="text" id="ssid" name="ssid" required readonly></div>
+                    </div>
+                    <div class="cbi-value">
+                        <label class="cbi-value-title" for="password" data-lang="password">Password:</label>
+                        <div class="cbi-value-field"><input type="password" id="password" name="password"></div>
+                    </div>
+                    <div class="cbi-page-actions">
+                        <input type="submit" class="cbi-button cbi-button-apply" value="Connect" id="button" data-lang-value="connect">
+                    </div>
+                </form>
+                <div id="ap_list"></div>
+            </div>
         </div>
     </div>
-
-    <!-- Advanced Configuration Tab -->
+    <div id="sonic-tab" class="tab-content">
+        <div class="cbi-map">
+            <h2 data-lang="sonic_title">声波配网</h2>
+            <div class="cbi-map-descr" data-lang="sonic_descr">输入 Wi-Fi 名称和密码，生成音频后对着设备播放。</div>
+            <div class="cbi-section">
+              <div class="cbi-value"><label class="cbi-value-title" for="sonic-ssid" data-lang="sonic_ssid">WiFi 名称</label><div class="cbi-value-field"><input id="sonic-ssid" type="text"></div></div>
+              <div class="cbi-value"><label class="cbi-value-title" for="sonic-pwd" data-lang="password">Password:</label><div class="cbi-value-field"><input id="sonic-pwd" type="password"></div></div>
+              <div class="cbi-value"><label class="cbi-value-title" data-lang="sonic_loop">循环播放</label><div class="cbi-value-field"><label><input type="checkbox" id="sonic-loop" checked> <span data-lang="sonic_loop_hint">自动循环播放声波</span></label></div></div>
+            </div>
+            <div class="cbi-page-actions">
+              <button type="button" class="cbi-button cbi-button-apply" onclick="generate()" data-lang="sonic_generate">生成并播放声波</button>
+              <button type="button" class="cbi-button" onclick="stopPlay()" data-lang="sonic_stop">停止播放</button>
+            </div>
+            <audio id="sonic-player" controls></audio>
+        </div>
+    </div>
     <div id="advanced-tab" class="tab-content">
+        <div class="cbi-map">
         <form action="/advanced/submit" method="post" onsubmit="submitAdvancedForm(event)">
-            <div>
-                <h3 data-lang="advanced_tab">Advanced</h3>
-                <p class="error" style="color: red; text-align: center;" id="advanced_error"></p>
-                
-                <!-- OTA URL -->
-                <p>
-                    <label for="ota_url" data-lang="ota_url">Custom OTA URL:</label>
-                    <div style="display: flex; align-items: center; gap: 10px;">
-                        <input type="text" id="ota_url" name="ota_url" style="flex: 1;">
-                        <button type="button" onclick="clearOtaUrl()" style="padding: 5px 10px; border: 1px solid #ccc; border-radius: 3px; background-color: #f0f0f0; cursor: pointer;">❌</button>
+                <h2 data-lang="advanced_tab">Advanced</h2>
+                <p class="alert-message error" id="advanced_error" style="display:none"></p>
+                <div class="cbi-section">
+                <div class="cbi-value">
+                    <label class="cbi-value-title" for="ota_url" data-lang="ota_url">Custom OTA URL:</label>
+                    <div class="cbi-value-field row">
+                        <input type="text" id="ota_url" name="ota_url">
+                        <button type="button" class="cbi-button" onclick="clearOtaUrl()">×</button>
                     </div>
-                </p>
-
-                <!-- Max TX Power -->
-                <p style="display: flex; align-items: center; gap: 10px;">
-                    <label for="max_tx_power" data-lang="max_tx_power" style="white-space: nowrap;">Wi-Fi Max TX Power:</label>
+                </div>
+                <div class="cbi-value">
+                    <label class="cbi-value-title" for="max_tx_power" data-lang="max_tx_power">Wi-Fi Max TX Power:</label>
+                    <div class="cbi-value-field">
                     <select id="max_tx_power" name="max_tx_power">
                         <option value="8">2 dBm</option>
                         <option value="20">5 dBm</option>
@@ -294,39 +94,33 @@
                         <option value="72">18 dBm</option>
                         <option value="80">20 dBm</option>
                     </select>
-                </p>
-
-                <!-- Remember BSSID -->
-                <p style="display: flex; align-items: center; gap: 10px;">
-                    <label for="remember_bssid" style="margin: 0;">
-                        <span data-lang="remember_bssid">Remember BSSID when connecting to Wi-Fi</span>
-                    </label>
-                    <input type="checkbox" id="remember_bssid" name="remember_bssid">
-                </p>
-
-                <!-- Sleep Mode -->
-                <p style="display: flex; align-items: center; gap: 10px;">
-                    <label for="sleep_mode" style="margin: 0;">
-                        <span data-lang="sleep_mode">Enable Sleep Mode</span>
-                    </label>
-                    <input type="checkbox" id="sleep_mode" name="sleep_mode">
-                </p>
-
-                <p style="text-align: center;">
-                    <input type="submit" value="Save" id="advanced_button" data-lang-value="save">
-                </p>
-            </div>
+                    </div>
+                </div>
+                <div class="cbi-value">
+                    <label class="cbi-value-title" for="remember_bssid" data-lang="remember_bssid">Remember BSSID when connecting to Wi-Fi</label>
+                    <div class="cbi-value-field"><input type="checkbox" id="remember_bssid" name="remember_bssid"></div>
+                </div>
+                <div class="cbi-value">
+                    <label class="cbi-value-title" for="sleep_mode" data-lang="sleep_mode">Enable Sleep Mode</label>
+                    <div class="cbi-value-field"><input type="checkbox" id="sleep_mode" name="sleep_mode"></div>
+                </div>
+                </div>
+                <div class="cbi-page-actions">
+                    <input type="submit" class="cbi-button cbi-button-save" value="Save" id="advanced_button" data-lang-value="save">
+                </div>
         </form>
+        </div>
     </div>
-
+</div>
+<footer>
+  <span>Powered by Zack</span>
+</footer>
     <script type="text/javascript">
-        // ========== Global Variables ==========
         const button = document.getElementById('button');
         const error = document.getElementById('error');
         const ssid = document.getElementById('ssid');
-        let support5G = false; // Store 5G support status
+        let support5G = false;
 
-        // ========== Translation Data ==========
         const translations = {
             'ar-SA': {
                 title: 'تكوين الشبكة',
@@ -470,7 +264,23 @@
                 max_tx_power: 'Wi-Fi Max TX Power:',
                 remember_bssid: 'Remember BSSID when connecting to Wi-Fi',
                 sleep_mode: 'Enable Sleep Mode',
-                save: 'Save'
+                save: 'Save',
+                theme_luci: 'LuCI',
+                theme_ink: 'Ink',
+                network_mode: 'Network',
+                system_mode: 'System',
+                menu_theme: 'Theme',
+                menu_wireless: 'Wireless',
+                menu_sonic: 'Sonic setup',
+                sonic_title: 'Sonic Wi-Fi setup',
+                sonic_descr: 'Enter the Wi-Fi name and password, then play the audio toward the device.',
+                sonic_ssid: 'Wi-Fi name',
+                sonic_loop: 'Loop playback',
+                sonic_loop_hint: 'Repeat the tone automatically',
+                sonic_generate: 'Generate and play',
+                sonic_stop: 'Stop',
+                signal: 'Signal',
+                security: 'Security'
             },
             'es-ES': {
                 title: 'Configuración de red',
@@ -992,7 +802,23 @@
                 max_tx_power: 'Wi-Fi 最大发射功率:',
                 remember_bssid: '连接 Wi-Fi 时记住 BSSID',
                 sleep_mode: '启用睡眠模式',
-                save: '保存'
+                save: '保存',
+                theme_luci: 'LuCI',
+                theme_ink: '墨水屏',
+                network_mode: '网络',
+                system_mode: '系统',
+                menu_theme: '主题',
+                menu_wireless: '无线',
+                menu_sonic: '声波配网',
+                sonic_title: '声波配网',
+                sonic_descr: '输入 Wi-Fi 名称和密码，生成音频后对着设备播放。',
+                sonic_ssid: 'WiFi 名称',
+                sonic_loop: '循环播放',
+                sonic_loop_hint: '自动循环播放声波',
+                sonic_generate: '生成并播放声波',
+                sonic_stop: '停止播放',
+                signal: '信号',
+                security: '加密'
             },
             'zh-TW': {
                 title: '網路設定',
@@ -1131,13 +957,13 @@
             // Update text content
             document.querySelectorAll('[data-lang]').forEach(element => {
                 const key = element.getAttribute('data-lang');
-                element.textContent = translations[lang][key];
+                element.textContent = translations[lang][key] || translations['en-US'][key] || key;
             });
             
             // Update input values
             document.querySelectorAll('[data-lang-value]').forEach(element => {
                 const key = element.getAttribute('data-lang-value');
-                element.value = translations[lang][key];
+                element.value = translations[lang][key] || translations['en-US'][key] || key;
             });
             
             // Update AP list text based on 5G support
@@ -1160,26 +986,20 @@
             const savedListContainer = document.getElementById('saved_list_container');
             const savedList = document.getElementById('saved_list');
             savedList.innerHTML = '';
-            
+            const head = document.createElement('div');
+            head.className = 'tr cbi-section-table-titles';
+            head.innerHTML = '<div class="th">SSID</div><div class="th"></div>';
+            savedList.appendChild(head);
             data.forEach((ssid, index) => {
-                const li = document.createElement('li');
-                let html = `<span>${ssid}</span>`;
-                
-                // Only add priority and delete buttons after the first item
+                const tr = document.createElement('div');
+                tr.className = 'tr';
+                let actions = `<button type="button" class="cbi-button cbi-button-remove" onclick="deleteItem(this, ${index})">×</button>`;
                 if (index > 0) {
-                    html += ` <span>
-                        <button type="button" onclick="setDefaultItem(this, ${index})">⬆️</button>
-                        <button type="button" onclick="deleteItem(this, ${index})">❌</button>
-                    </span>`;
-                } else {
-                    html += ` <span><button type="button" onclick="deleteItem(this, ${index})">❌</button></span>`;
+                    actions = `<button type="button" class="cbi-button" onclick="setDefaultItem(this, ${index})">↑</button> ` + actions;
                 }
-                
-                li.innerHTML = html;
-                savedList.appendChild(li);
+                tr.innerHTML = `<div class="td">${ssid}</div><div class="td cbi-section-actions">${actions}</div>`;
+                savedList.appendChild(tr);
             });
-            
-            // Show/hide container based on whether there are saved networks
             savedListContainer.style.display = data.length > 0 ? 'block' : 'none';
         }
 
@@ -1230,7 +1050,7 @@
             const apList = document.getElementById('ap_list');
 
             // Check if AP list already has content
-            const hasExistingAPs = apList.querySelector('a') !== null;
+            const hasExistingAPs = apList.querySelector('.ssid') !== null;
 
             // Only show scanning text if there's no existing AP list
             if (!hasExistingAPs) {
@@ -1245,27 +1065,20 @@
                     
                     // Use select_wifi_5g if 5G is supported, otherwise use select_wifi
                     const selectText = support5G ? translations[lang].select_wifi_5g : translations[lang].select_wifi;
-                    apList.innerHTML = '<p>' + selectText + '</p>';
-                    
-                    // Iterate through available APs
+                    apList.innerHTML = '<p class="cbi-section-descr">' + selectText + '</p>';
+                    const table = document.createElement('div');
+                    table.className = 'table cbi-section-table';
+                    table.innerHTML = '<div class="tr cbi-section-table-titles"><div class="th">SSID</div><div class="th">RSSI</div><div class="th"></div></div>';
                     data.aps.forEach(ap => {
-                        const link = document.createElement('a');
-                        link.href = '#';
-                        link.textContent = ap.ssid + ' (' + ap.rssi + ' dBm)';
-                        
-                        // Add lock icon for secured networks
-                        if (ap.authmode === 0) {
-                            link.textContent += ' 🌐';
-                        } else {
-                            link.textContent += ' 🔒';
-                        }
-                        
-                        link.addEventListener('click', () => {
-                            ssid.value = ap.ssid;
-                        });
-                        
-                        apList.appendChild(link);
+                        const tr = document.createElement('div');
+                        tr.className = 'tr';
+                        const lock = ap.authmode === 0 ? 'Open' : 'PSK';
+                        tr.innerHTML = `<div class="td cbi-section-table-cell ssid"></div><div class="td">${ap.rssi} dBm</div><div class="td">${lock}</div>`;
+                        tr.querySelector('.ssid').textContent = ap.ssid;
+                        tr.querySelector('.ssid').addEventListener('click', () => { ssid.value = ap.ssid; });
+                        table.appendChild(tr);
                     });
+                    apList.appendChild(table);
                     
                     // Refresh AP list every 5 seconds
                     setTimeout(loadAPList, 5000);
@@ -1285,7 +1098,7 @@
         async function submitForm(event) {
             event.preventDefault();
             button.disabled = true;
-            error.textContent = '';
+            error.textContent = ''; error.style.display = 'none';
 
             // Show loading animation
             const loadingOverlay = document.getElementById('loadingOverlay');
@@ -1316,7 +1129,7 @@
             } catch (err) {
                 // Hide loading animation on error
                 loadingOverlay.classList.remove('show');
-                error.textContent = err.message;
+                error.textContent = err.message; error.style.display = 'block';
                 button.disabled = false;
             }
         }
@@ -1329,7 +1142,7 @@
             const advancedButton = document.getElementById('advanced_button');
             const advancedError = document.getElementById('advanced_error');
             advancedButton.disabled = true;
-            advancedError.textContent = '';
+            advancedError.textContent = ''; advancedError.style.display = 'none';
 
             const config = {
                 ota_url: document.getElementById('ota_url').value,
@@ -1355,7 +1168,7 @@
                 advancedButton.disabled = false;
                 showToast('Configuration saved');
             } catch (err) {
-                advancedError.textContent = err.message;
+                advancedError.textContent = err.message; advancedError.style.display = 'block';
                 advancedButton.disabled = false;
             }
         }
@@ -1366,21 +1179,17 @@
          * Switch between tabs
          */
         function switchTab(tabName) {
-            // Hide all tab contents
-            document.querySelectorAll('.tab-content').forEach(content => {
-                content.classList.remove('active');
-            });
-            
-            // Remove active class from all tabs
-            document.querySelectorAll('.tab').forEach(tab => {
-                tab.classList.remove('active');
-            });
-            
-            // Show selected tab content
-            document.getElementById(tabName + '-tab').classList.add('active');
-            
-            // Activate selected tab
-            document.querySelector(`.tab[onclick="switchTab('${tabName}')"]`).classList.add('active');
+            if (tabName !== 'wifi' && tabName !== 'sonic' && tabName !== 'advanced') tabName = 'wifi';
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            const panel = document.getElementById(tabName + '-tab');
+            if (panel) panel.classList.add('active');
+            if (window.inkLuciChrome) {
+                window.inkLuciChrome.setRouteHash(tabName);
+                window.inkLuciChrome.scrollContentTop();
+                window.inkLuciChrome.syncActive();
+            } else if (location.hash !== '#' + tabName) {
+                location.hash = tabName;
+            }
         }
 
         /**
@@ -1446,10 +1255,14 @@
                              getSupportedLanguage(browserLang);
             
             document.getElementById('language').value = savedLang;
+            document.getElementById('language').addEventListener('change', changeLanguage);
             changeLanguage();
             loadSavedList();
             loadAPList();
             loadAdvancedConfig();
+            const hashTab = (location.hash || '#wifi').slice(1);
+            switchTab(hashTab);
+            window.addEventListener('hashchange', () => switchTab((location.hash || '#wifi').slice(1)));
         });
 
         /**
@@ -1468,6 +1281,9 @@
             ssid.removeAttribute('readonly');
             ssid.focus();
         }, {once: true});
+
+__LUCI_SONIC_JS__
+__LUCI_THEME_JS__
     </script>
 </body>
 </html>

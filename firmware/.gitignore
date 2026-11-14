@@ -1,4 +1,6 @@
 build/
+webui/.preview/
+webui/preview-*.html
 .claude/
 __pycache__/
 *.pyc

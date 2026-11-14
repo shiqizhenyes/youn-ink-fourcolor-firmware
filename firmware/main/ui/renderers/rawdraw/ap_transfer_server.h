@@ -5,7 +5,7 @@
  * Provides:
  * - WiFi AP (SSID: InkScreen-AP, Password: 12345678)
  * - HTTP Server at 192.168.4.1
- * - HTML page for image upload
+ * - HTML page for album management and image upload
  * - Floyd-Steinberg dithering
  * - Save to SPIFFS
  */
@@ -64,7 +64,12 @@ public:
     void SetPhotosChangedCallback(std::function<void()> callback);
     void SetShowPhotoCallback(std::function<bool(const std::string& photo_id)> callback);
 
+    // Called on each user-driven request (not on status polling); resets the idle timer.
+    static void SetActivityCallback(std::function<void()> callback);
+
 private:
+    static void NotifyActivity();
+
     enum class TransferMode {
         kNone,
         kAp,
@@ -94,12 +99,22 @@ private:
     static esp_err_t IndexHandler(httpd_req_t* req);
     static esp_err_t UploadHandler(httpd_req_t* req);
     static esp_err_t StatusHandler(httpd_req_t* req);
+    static esp_err_t PowerLogHandler(httpd_req_t* req);
     static esp_err_t SettingsHandler(httpd_req_t* req);
     static esp_err_t PhotosHandler(httpd_req_t* req);
     static esp_err_t PhotoHandler(httpd_req_t* req);
     static esp_err_t PhotoMetaHandler(httpd_req_t* req);
     static esp_err_t PhotoMoveHandler(httpd_req_t* req);
     static esp_err_t PhotoShowHandler(httpd_req_t* req);
+    static esp_err_t OverviewHandler(httpd_req_t* req);
+    static esp_err_t InterfaceHandler(httpd_req_t* req);
+    static esp_err_t ScanHandler(httpd_req_t* req);
+    static esp_err_t SavedListHandler(httpd_req_t* req);
+    static esp_err_t SavedDeleteHandler(httpd_req_t* req);
+    static esp_err_t SavedSetDefaultHandler(httpd_req_t* req);
+    static esp_err_t SubmitWifiHandler(httpd_req_t* req);
+    static esp_err_t DeveloperBleHandler(httpd_req_t* req);
+    static esp_err_t DeveloperLayoutHandler(httpd_req_t* req);
     
     // Notify state change
     void NotifyState(ServerState state, const std::string& message);

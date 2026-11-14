@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-chrome="lan">
+<head>
+<script>(function(){try{var t=localStorage.getItem('inkscreen-web-theme');document.documentElement.setAttribute('data-theme',t==='ink'?'ink':'luci');}catch(e){document.documentElement.setAttribute('data-theme','luci');}})();</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>图库</title>
+<style>
+__LUCI_LITE_CSS__
+</style>
+</head>
+<body>
+__LUCI_HEADER__
+<div id="maincontent" class="container">
+  <div class="view-panel" id="view-status">
+    <div class="cbi-map">
+      <h2>概览</h2>
+      <div class="cbi-map-descr">系统概览</div>
+      <div class="cbi-section">
+        <div class="metric"><span class="metric-label">系统启动时间</span><span class="metric-value" id="ovUptime">—</span></div>
+        <div class="metric"><span class="metric-label">本地时间</span><span class="metric-value" id="ovLocal">—</span></div>
+        <div class="metric"><span class="metric-label">机器型号</span><span class="metric-value" id="ovModel">—</span></div>
+        <div class="metric"><span class="metric-label">固件版本</span><span class="metric-value" id="ovVersion">—</span></div>
+      </div>
+      <div class="cbi-section">
+        <h3>电池状态</h3>
+        <div class="metric"><span class="metric-label">电量</span><span class="metric-value" id="ovBatLevel">--</span></div>
+        <div class="metric"><span class="metric-label">状态</span><span class="metric-value" id="ovBatStatus">--</span></div>
+        <div class="meter"><span id="ovBatFill" style="width:0%"></span></div>
+        <div class="muted" id="ovBatText">--</div>
+      </div>
+    </div>
+  </div>
+  <div class="view-panel active" id="view-photos">
+    <div class="cbi-map gallery-page">
+      <section class="note" id="helpPanel" style="display:none"><b>功能说明</b><ul><li>支持 1 BP 黑白和 2 BP 四色图片上传，保存后可在设备相册查看。</li><li>轮播关闭后，大图会固定停在当前图片；开启后，设备在相册大图模式按周期自动切换。</li><li>局域网服务开启时，页面顶部会显示设备本地 IP，可用手机或 NAS/本地 server 管理图片。</li><li>关闭服务只停止本地传图网页；关闭并省电会停止服务和 WiFi，进入 deep sleep，按 BOOT 唤醒。</li><li>极致省电建议：选好大图，关闭轮播，再执行关闭并省电，墨水屏会保留最后画面。</li></ul></section>
+      <div class="gallery-workspace">
+        <div class="gallery-card dropzone" id="dropzone">
+          <div class="dropzone-title">图片上传</div>
+          <input class="file-hidden" id="file" type="file" accept="image/*">
+          <div class="dropzone-body" id="dropHint"><div class="dropzone-icon">↑</div><div>Drag & drop image</div></div>
+        </div>
+        <div class="gallery-card algo-card">
+          <div class="algo-head"><div><div class="algo-title">设置</div><div class="muted">参数 / Options</div></div></div>
+          <div class="algo-field-title">格式 / Format</div>
+          <div class="fmt-row"><label class="radio-chip"><input name="fmt" type="radio" value="1bpp" checked>1BP 黑色</label><label class="radio-chip"><input name="fmt" type="radio" value="bwry2bpp">2BP 四色</label></div>
+          <div class="algo-field-title">调节</div>
+          <div class="tune-row"><span>图片亮度</span><input id="tuneBright" type="range" min="-50" max="50" value="0"><span class="tune-val" id="tuneBrightVal">0%</span></div>
+          <div class="tune-row"><span>对比度</span><input id="tuneContrast" type="range" min="-50" max="50" value="0"><span class="tune-val" id="tuneContrastVal">0%</span></div>
+          <div class="tune-row"><span>饱和度</span><input id="tuneSat" type="range" min="-50" max="50" value="0"><span class="tune-val" id="tuneSatVal">0%</span></div>
+          <div class="send-row"><button class="cbi-button cbi-button-apply" id="send" disabled>发送</button></div>
+          <div class="status-line" id="uploadStatus">等待选择</div>
+        </div>
+        <div class="gallery-card preview-card">
+          <div class="preview-head">图片效果预览 <span class="preview-new" id="previewNew" hidden>NEW</span></div>
+          <div class="compare-preview" id="compareBox">
+            <div class="compare-stage" id="compareStage">
+              <canvas id="previewOrig" width="400" height="300"></canvas>
+              <canvas class="preview" id="preview" width="400" height="300"></canvas>
+            </div>
+            <div class="compare-tools mid"><button type="button" id="compareReset" title="居中">○</button></div>
+            <div class="compare-tools br"><button type="button" id="zoomOut" title="缩小">−</button><button type="button" id="zoomIn" title="放大">+</button></div>
+            <input class="compare-range" id="compareRange" type="range" min="0" max="100" value="50">
+          </div>
+        </div>
+      </div>
+      <div class="gallery-library">
+        <div class="bar"><h3>我的图库 <span class="muted" id="count"></span></h3><div class="row"><input id="photoSearch" class="cbi-input-text gallery-search" type="search" placeholder="搜索"><button class="cbi-button" id="reload">刷新</button><button class="btn danger" id="batch" disabled>删除选中</button></div></div>
+        <div id="photoGrid" class="grid"><div class="empty">读取中...</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="view-panel" id="view-system">
+    <div class="cbi-map">
+    <h2>设置</h2>
+    <div class="cbi-map-descr">相册轮播、天气和本机服务。<span class="muted" id="settingsState"></span></div>
+    <div class="cbi-section">
+      <h3>相册轮播周期</h3>
+      <div class="cbi-value"><label class="cbi-value-title">间隔</label><div class="cbi-value-field row"><label class="radio-chip"><input name="slide" type="radio" value="0">关闭</label><label class="radio-chip"><input name="slide" type="radio" value="5">5min</label><label class="radio-chip"><input name="slide" type="radio" value="10">10min</label><label class="radio-chip"><input name="slide" type="radio" value="30">30min</label></div></div>
+    </div>
+    <div class="cbi-section">
+      <h3>天气语音播报</h3>
+      <div class="cbi-value"><label class="cbi-value-title">每日播报</label><div class="cbi-value-field row"><input id="bcastTime" type="time"><label class="radio-chip"><input id="bcastOff" type="checkbox">关闭每日播报</label><label class="radio-chip"><input id="autoSpeak" type="checkbox">进入天气页自动播报</label></div></div>
+    </div>
+    <div class="cbi-section">
+      <h3>天气更新频率</h3>
+      <div class="cbi-section-descr">白天 06:00-18:00</div>
+      <div class="cbi-value"><label class="cbi-value-title">白天</label><div class="cbi-value-field"><select id="dayRefresh" class="wxsel"></select></div></div>
+      <div class="cbi-value"><label class="cbi-value-title">夜间</label><div class="cbi-value-field"><select id="nightRefresh" class="wxsel"></select></div></div>
+      <div class="cbi-value"><label class="cbi-value-title">天气城市</label><div class="cbi-value-field"><input id="weatherCity" type="text" maxlength="16" placeholder="城市名，如 杭州"></div></div>
+    </div>
+    <div class="cbi-page-actions">
+      <button class="cbi-button cbi-button-save" id="saveSettings">保存设置</button>
+      <button class="cbi-button" id="stopService">关闭服务</button>
+      <button class="btn danger" id="sleepNow">关闭并省电</button>
+    </div>
+    </div>
+  </div>
+  <div class="view-panel" id="view-wireless">
+    <div class="cbi-map">
+      <h2>无线</h2>
+      <div class="cbi-map-descr">扫描并保存 Wi-Fi。连接新网络后页面可能短暂断开。</div>
+      <div id="saved_list_container" class="cbi-section" style="display:none">
+        <h3>已保存的 Wi-Fi</h3>
+        <div id="saved_list" class="table cbi-section-table"></div>
+      </div>
+      <div class="cbi-section">
+        <h3>新的 Wi-Fi</h3>
+        <p class="alert-message error" id="wifiError" style="display:none"></p>
+        <div class="cbi-value"><label class="cbi-value-title" for="lanSsid">SSID</label><div class="cbi-value-field"><input type="text" id="lanSsid"></div></div>
+        <div class="cbi-value"><label class="cbi-value-title" for="lanPassword">密码</label><div class="cbi-value-field"><input type="password" id="lanPassword"></div></div>
+        <div class="cbi-page-actions">
+          <button type="button" class="cbi-button cbi-button-apply" id="lanConnect">连接</button>
+          <button type="button" class="cbi-button" id="lanScan">刷新扫描</button>
+        </div>
+        <div id="ap_list"></div>
+      </div>
+    </div>
+  </div>
+  <div class="view-panel" id="view-interfaces">
+    <div class="cbi-map">
+      <h2>接口</h2>
+      <div class="cbi-map-descr">配置 STA 口 WIFI_STA_DEF。保存后地址可能变化，页面可能短暂断开。</div>
+      <p class="alert-message" id="ifaceMsg" style="display:none"></p>
+      <div class="cbi-section">
+        <h3>常规设置</h3>
+        <div class="cbi-value"><label class="cbi-value-title" for="ifaceProto">协议</label><div class="cbi-value-field"><select id="ifaceProto"><option value="dhcp">DHCP 客户端</option><option value="static">静态地址</option></select><div class="cbi-value-description">Protocol</div></div></div>
+        <div class="cbi-value" id="ifaceHostnameRow"><label class="cbi-value-title" for="ifaceHostname">DHCP 请求时发送的主机名</label><div class="cbi-value-field"><input id="ifaceHostname" type="text" maxlength="32"><div class="cbi-value-description">Hostname to send when requesting DHCP</div></div></div>
+      </div>
+      <div class="cbi-section" id="ifaceIpv4Section">
+        <h3>IPv4</h3>
+        <div class="cbi-value"><label class="cbi-value-title" for="ifaceIpv4Mode">请求 IPv4 地址</label><div class="cbi-value-field"><select id="ifaceIpv4Mode"><option value="auto" selected>自动</option><option value="static">静态地址</option></select><div class="cbi-value-description">Request IPv4-address</div><div class="muted" id="ifaceIpv4Live"></div></div></div>
+        <div id="ifaceIpv4Static" style="display:none">
+          <div class="cbi-value"><label class="cbi-value-title" for="ifaceIpv4">IPv4 地址</label><div class="cbi-value-field"><input id="ifaceIpv4" type="text"><div class="cbi-value-description">IPv4 address</div></div></div>
+          <div class="cbi-value"><label class="cbi-value-title" for="ifaceMask">IPv4 子网掩码</label><div class="cbi-value-field"><input id="ifaceMask" type="text"><div class="cbi-value-description">IPv4 netmask</div></div></div>
+          <div class="cbi-value"><label class="cbi-value-title" for="ifaceGw">IPv4 网关</label><div class="cbi-value-field"><input id="ifaceGw" type="text"><div class="cbi-value-description">IPv4 gateway</div></div></div>
+          <div class="cbi-value"><label class="cbi-value-title" for="ifaceBcast">IPv4 广播地址</label><div class="cbi-value-field"><input id="ifaceBcast" type="text"><div class="cbi-value-description">IPv4 broadcast</div></div></div>
+          <div class="cbi-value"><label class="cbi-value-title">使用该接口的网关作为默认网关</label><div class="cbi-value-field"><label><input type="checkbox" id="ifaceUseGw" checked> Use default gateway</label></div></div>
+        </div>
+      </div>
+      <div class="cbi-section">
+        <h3>DNS</h3>
+        <div class="cbi-value" id="ifacePeerdnsRow"><label class="cbi-value-title">自动获取 DNS 服务器</label><div class="cbi-value-field"><label><input type="checkbox" id="ifacePeerdns" checked> Use DNS servers advertised by peer</label></div></div>
+        <div class="cbi-value"><label class="cbi-value-title">使用自定义的 DNS 服务器</label><div class="cbi-value-field"><input id="ifaceDns0" type="text" placeholder="主 DNS"><input id="ifaceDns1" type="text" placeholder="备 DNS" style="margin-top:6px"><div class="cbi-value-description">Use custom DNS servers</div></div></div>
+      </div>
+      <div class="cbi-section">
+        <h3>IPv6</h3>
+        <div class="cbi-value"><label class="cbi-value-title" for="ifaceIpv6Mode">请求 IPv6 地址</label><div class="cbi-value-field"><select id="ifaceIpv6Mode"><option value="disabled">已禁用</option><option value="auto" selected>自动</option><option value="static">静态地址</option></select><div class="cbi-value-description">Request IPv6-address</div><div class="muted" id="ifaceIpv6Live"></div></div></div>
+        <div id="ifaceIpv6Static" style="display:none">
+          <div class="cbi-value"><label class="cbi-value-title" for="ifaceIpv6">IPv6 地址</label><div class="cbi-value-field"><input id="ifaceIpv6" type="text"><div class="cbi-value-description">IPv6 address</div></div></div>
+          <div class="cbi-value"><label class="cbi-value-title" for="ifaceIpv6Plen">IPv6 地址前缀长度</label><div class="cbi-value-field"><input id="ifaceIpv6Plen" type="number" min="1" max="128" value="64"><div class="cbi-value-description">IPv6 prefix length</div></div></div>
+          <div class="cbi-value"><label class="cbi-value-title" for="ifaceIpv6Gw">IPv6 网关</label><div class="cbi-value-field"><input id="ifaceIpv6Gw" type="text"><div class="cbi-value-description">IPv6 gateway</div></div></div>
+        </div>
+      </div>
+      <div class="cbi-page-actions">
+        <button class="cbi-button cbi-button-save" id="ifaceSave">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+<footer>
+  <span>Powered by Zack</span>
+</footer>
+<div class="toast" id="toast"></div>
+<div class="modal" id="modal"><div class="dialog"><button class="cbi-button close" id="close">×</button><canvas class="big" id="big" width="400" height="300"></canvas><div class="meta"><input id="mTitle" type="text"><div class="row" style="margin-top:6px"><input id="mDate" placeholder="日期"><input id="mLocation" placeholder="地点"></div><textarea id="mBody" rows="3"></textarea><div class="muted" id="mMeta" style="margin-top:5px"></div><div class="row" style="margin-top:8px"><button class="btn yellow" id="mSave">保存信息</button><button class="cbi-button" id="mUp">上移</button><button class="cbi-button" id="mDown">下移</button><button class="btn danger" id="mDelete">删除这张</button></div></div></div></div>
+<script>
+
+const W=400,H=300,photosEl=document.getElementById('photoGrid'),statusEl=document.getElementById('uploadStatus'),pv=document.getElementById('preview'),pvOrig=document.getElementById('previewOrig'),fileEl=document.getElementById('file'),sendBtn=document.getElementById('send'),batchBtn=document.getElementById('batch'),countEl=document.getElementById('count'),settingsState=document.getElementById('settingsState'),endpointEl=document.getElementById('endpoint');let pending=null,pendingFmt='1bpp',items=[],selected=new Set(),active=null,sourceRgba=null,sourceName='',convertSeq=0,tuneTimer=0,previewZoom=1;
+async function loadStatus(){try{const j=await (await fetch('/status')).json();endpointEl.textContent=`${j.mode==='lan'?'LAN':'InkScreen-AP'} / ${j.ip}`;document.title=`墨水屏传图 ${j.ip}`}catch(e){endpointEl.textContent='服务地址读取失败'}}
+function fmt(){return document.querySelector('input[name=fmt]:checked').value}
+function rgba(c){return c===0?[0,0,0]:c===1?[255,255,255]:c===2?[255,217,0]:[220,0,0]}
+function draw1(buf,canvas){const ctx=canvas.getContext('2d'),img=ctx.createImageData(W,H),d=img.data;for(let p=0,i=0;p<W*H;p++,i+=4){const v=(buf[p>>3]&(1<<(7-(p&7))))?255:0;d[i]=d[i+1]=d[i+2]=v;d[i+3]=255}ctx.putImageData(img,0,0)}
+function draw2(buf,canvas,pal){const ctx=canvas.getContext('2d'),img=ctx.createImageData(W,H),d=img.data;for(let p=0,i=0;p<W*H;p++,i+=4){const b=buf[p>>2],c=(b>>(6-((p&3)*2)))&3,r=pal?pal[c]:rgba(c);d[i]=r[0];d[i+1]=r[1];d[i+2]=r[2];d[i+3]=255}ctx.putImageData(img,0,0)}
+function fitImage(file){return new Promise((res,rej)=>{const img=new Image();img.onload=()=>{const c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d',{willReadFrequently:true});x.fillStyle='#fff';x.fillRect(0,0,W,H);const s=Math.min(W/img.width,H/img.height),w=Math.round(img.width*s),h=Math.round(img.height*s);x.drawImage(img,(W-w)/2,(H-h)/2,w,h);URL.revokeObjectURL(img.src);res(x.getImageData(0,0,W,H).data)};img.onerror=rej;img.src=URL.createObjectURL(file)})}
+function tunePct(id){return Number(document.getElementById(id).value)||0}
+function formatPct(v){return (v>0?'+':'')+v+'%'}
+function syncTuneLabels(){document.getElementById('tuneBrightVal').textContent=formatPct(tunePct('tuneBright'));document.getElementById('tuneContrastVal').textContent=formatPct(tunePct('tuneContrast'));document.getElementById('tuneSatVal').textContent=formatPct(tunePct('tuneSat'))}
+function applyTune(src){const bright=tunePct('tuneBright')/100,contrast=tunePct('tuneContrast')/100,sat=tunePct('tuneSat')/100,cf=1+contrast,out=new Uint8ClampedArray(src);for(let i=0;i<out.length;i+=4){let r=src[i]+bright*255,g=src[i+1]+bright*255,b=src[i+2]+bright*255;r=(r-128)*cf+128;g=(g-128)*cf+128;b=(b-128)*cf+128;const y=0.299*r+0.587*g+0.114*b,k=1+sat;r=y+(r-y)*k;g=y+(g-y)*k;b=y+(b-y)*k;out[i]=r;out[i+1]=g;out[i+2]=b}return out}
+function drawRgba(data,canvas){const ctx=canvas.getContext('2d'),img=ctx.createImageData(W,H);img.data.set(data);ctx.putImageData(img,0,0)}
+function setCompareSplit(pct){const v=Math.max(0,Math.min(100,Number(pct)||0));document.getElementById('preview').style.clipPath='inset(0 0 0 '+v+'%)'}
+function setPreviewZoom(z){previewZoom=Math.max(1,Math.min(2.5,z));document.getElementById('compareStage').style.transform='scale('+previewZoom+')'}
+function convertFromRgba(data){const mode=fmt();pendingFmt=mode;if(mode==='bwry2bpp'){const work=new Array(H);for(let y=0;y<H;y++){work[y]=new Array(W);for(let x=0;x<W;x++){const i=(y*W+x)*4;work[y][x]={r:data[i],g:data[i+1],b:data[i+2]}}}const pal=[[0,0,0],[255,255,255],[255,0,0],[255,255,0]];const out=new Uint8Array(30000);for(let y=0;y<H;y++)for(let x=0;x<W;x++){const old=work[y][x];let minD=1e9,cIdx=0,cRgb=pal[0];for(let k=0;k<4;k++){const d=0.299*(old.r-pal[k][0])**2+0.587*(old.g-pal[k][1])**2+0.114*(old.b-pal[k][2])**2;if(d<minD){minD=d;cIdx=k;cRgb=pal[k]}}const bwry=cIdx===0?0:cIdx===1?1:cIdx===2?3:2;out[(y*W+x)>>2]|=bwry<<(6-((y*W+x)&3)*2);const eR=old.r-cRgb[0],eG=old.g-cRgb[1],eB=old.b-cRgb[2];const dist=(dy,dx,f)=>{const ny=y+dy,nx=x+dx;if(ny>=0&&ny<H&&nx>=0&&nx<W){work[ny][nx].r+=eR*f;work[ny][nx].g+=eG*f;work[ny][nx].b+=eB*f}};dist(0,1,7/16);dist(1,-1,3/16);dist(1,0,5/16);dist(1,1,1/16)}draw2(out,pv);return out}const gray=new Int16Array(W*H);for(let p=0,i=0;p<gray.length;p++,i+=4)gray[p]=(data[i]*30+data[i+1]*59+data[i+2]*11)/100|0;const out=new Uint8Array(15000);for(let y=0;y<H;y++)for(let x=0;x<W;x++){const p=y*W+x,old=Math.max(0,Math.min(255,gray[p])),nw=old>128?255:0,err=old-nw;if(nw>128)out[p>>3]|=1<<(7-(p&7));if(x+1<W)gray[p+1]+=err*7/16;if(y+1<H){if(x>0)gray[p+W-1]+=err*3/16;gray[p+W]+=err*5/16;if(x+1<W)gray[p+W+1]+=err/16}}draw1(out,pv);return out}
+async function runConvert(){if(!sourceRgba)return;const seq=++convertSeq;statusEl.textContent='转换中...';sendBtn.disabled=true;try{const out=convertFromRgba(applyTune(sourceRgba));if(seq!==convertSeq)return;pending=out;sendBtn.disabled=false;document.getElementById('previewNew').hidden=false;statusEl.textContent=`已预览 ${pendingFmt==='bwry2bpp'?'2 BP 四色':'1 BP 黑白'}，确认后点击发送`}catch(e){if(seq!==convertSeq)return;statusEl.textContent='图片处理失败';sendBtn.disabled=true}}
+function scheduleConvert(){if(!sourceRgba){syncTuneLabels();return}syncTuneLabels();clearTimeout(tuneTimer);tuneTimer=setTimeout(runConvert,50)}
+async function loadSource(file){if(!file)return;sourceName=file.name||'image';statusEl.textContent='读取中...';try{sourceRgba=await fitImage(file);drawRgba(sourceRgba,pvOrig);const hint=document.getElementById('dropHint');hint.innerHTML='<div class="dropzone-icon">↑</div>';const nameEl=document.createElement('div');nameEl.textContent=sourceName;hint.appendChild(nameEl);await runConvert()}catch(e){statusEl.textContent='图片处理失败';sendBtn.disabled=true}}
+const dropzone=document.getElementById('dropzone');dropzone.addEventListener('click',e=>{if(e.target.closest('input'))return;fileEl.click()});['dragenter','dragover'].forEach(ev=>dropzone.addEventListener(ev,e=>{e.preventDefault();dropzone.classList.add('drag')}));['dragleave','drop'].forEach(ev=>dropzone.addEventListener(ev,e=>{e.preventDefault();dropzone.classList.remove('drag')}));dropzone.addEventListener('drop',e=>{const f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0];if(f)loadSource(f)});
+fileEl.onchange=()=>loadSource(fileEl.files[0]);document.querySelectorAll('input[name=fmt]').forEach(r=>r.onchange=()=>runConvert());
+['tuneBright','tuneContrast','tuneSat'].forEach(id=>{const el=document.getElementById(id);el.addEventListener('input',scheduleConvert);el.addEventListener('change',()=>{clearTimeout(tuneTimer);syncTuneLabels();runConvert()})});
+document.getElementById('compareRange').addEventListener('input',e=>setCompareSplit(e.target.value));
+document.getElementById('compareReset').onclick=()=>{document.getElementById('compareRange').value=50;setCompareSplit(50)};
+document.getElementById('zoomIn').onclick=()=>setPreviewZoom(previewZoom+0.25);
+document.getElementById('zoomOut').onclick=()=>setPreviewZoom(previewZoom-0.25);
+setCompareSplit(50);syncTuneLabels();
+sendBtn.onclick=async()=>{if(!pending)return;sendBtn.disabled=true;statusEl.textContent='上传中...';try{const r=await fetch('/upload?format='+encodeURIComponent(pendingFmt),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:pending});const j=await r.json();statusEl.textContent=j.success?'已发送并保存':'失败: '+(j.error||'unknown');if(j.success)document.getElementById('previewNew').hidden=true;await loadPhotos()}catch(e){statusEl.textContent='网络错误'}sendBtn.disabled=false};
+async function loadBin(p,c){const b=new Uint8Array(await (await fetch('/photo?id='+encodeURIComponent(p.id),{cache:'no-store'})).arrayBuffer());(p.format==='bwry2bpp'||p.size>15000?draw2:draw1)(b,c)}
+function updateBatch(){batchBtn.disabled=selected.size===0}
+function applyPhotoSearch(){const q=(document.getElementById('photoSearch').value||'').trim().toLowerCase();let n=0;photosEl.querySelectorAll('.card').forEach(card=>{const show=!q||(card.dataset.q||'').includes(q);card.style.display=show?'':'none';if(show)n++});const miss=photosEl.querySelector('.search-empty');if(miss) miss.style.display=n?'none':'block'}
+async function loadPhotos(){selected.clear();updateBatch();try{const j=await (await fetch('/photos',{cache:'no-store'})).json();items=j.photos||[];countEl.textContent=`${items.length} 张`;photosEl.innerHTML=items.length?'':'<div class="empty">暂无图片</div>';const thumbs=[];for(const p of items){const card=document.createElement('div');card.className='card';card.dataset.q=[p.title,p.body,p.date,p.location,p.id,p.format].join(' ').toLowerCase();const fmtLabel=p.format==='bwry2bpp'?'2 BP 四色':'1 BP 黑白';card.innerHTML=`<input class="check" type="checkbox"><span class="tag">${p.format==='bwry2bpp'?'2BP':'1BP'}</span><canvas class="thumb" width="400" height="300"></canvas><div class="meta"><div class="title">${p.title||p.id}</div><div class="body">${p.body||fmtLabel}</div><div class="muted">${p.date||''} ${p.location||''}</div><div class="row" style="margin-top:5px"><button class="btn yellow show">展示</button><button class="btn secondary up">上移</button><button class="btn secondary down">下移</button></div></div>`;const c=card.querySelector('canvas'),ck=card.querySelector('input');ck.onclick=e=>{e.stopPropagation();ck.checked?selected.add(p.id):selected.delete(p.id);updateBatch()};card.querySelector('.show').onclick=e=>{e.stopPropagation();showPhoto(p.id)};card.querySelector('.up').onclick=e=>{e.stopPropagation();movePhoto(p.id,-1)};card.querySelector('.down').onclick=e=>{e.stopPropagation();movePhoto(p.id,1)};card.onclick=()=>openModal(p);photosEl.appendChild(card);thumbs.push([p,c])}if(items.length){const miss=document.createElement('div');miss.className='empty search-empty';miss.textContent='没有匹配的图片';miss.style.display='none';photosEl.appendChild(miss)}applyPhotoSearch();for(const [p,c] of thumbs){await loadBin(p,c).catch(()=>{})}}catch(e){photosEl.innerHTML='<div class="empty">读取失败</div>'}}
+document.getElementById('photoSearch').addEventListener('input',applyPhotoSearch);
+function openModal(p){active=p;document.getElementById('modal').classList.add('open');document.getElementById('mTitle').value=p.title||'';document.getElementById('mDate').value=p.date||'';document.getElementById('mLocation').value=p.location||'';document.getElementById('mMeta').textContent=`${p.format==='bwry2bpp'?'2 BP 四色':'1 BP 黑白'} · ${p.width}x${p.height}`;document.getElementById('mBody').value=p.body||'';loadBin(p,document.getElementById('big')).catch(()=>{})}
+document.getElementById('close').onclick=()=>document.getElementById('modal').classList.remove('open');document.getElementById('modal').onclick=e=>{if(e.target.id==='modal')document.getElementById('modal').classList.remove('open')};
+async function delOne(id){return fetch('/photo?id='+encodeURIComponent(id),{method:'DELETE'}).then(r=>r.json())}
+document.getElementById('mDelete').onclick=async()=>{if(!active)return;if(!confirm('确认删除这张图片？'))return;await delOne(active.id);document.getElementById('modal').classList.remove('open');loadPhotos()};
+async function movePhoto(id,delta){await fetch('/photos/move',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,delta})});await loadPhotos()}
+let toastTimer=null;
+function notify(msg){
+  statusEl.textContent=msg;
+  const el=document.getElementById('toast');
+  if(!el) return;
+  el.textContent=msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>el.classList.remove('show'),2200);
+}
+async function showPhoto(id){
+  try{
+    const j=await (await fetch('/photo/show',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})})).json();
+    notify(j.success?'已展示该图，稍后继续轮播':'展示失败');
+  }catch(e){notify('展示失败')}
+}
+document.getElementById('mUp').onclick=()=>active&&movePhoto(active.id,-1);
+document.getElementById('mDown').onclick=()=>active&&movePhoto(active.id,1);
+document.getElementById('mSave').onclick=async()=>{if(!active)return;const body={id:active.id,title:document.getElementById('mTitle').value,date:document.getElementById('mDate').value,location:document.getElementById('mLocation').value,body:document.getElementById('mBody').value};const r=await fetch('/photo/meta',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if((await r.json()).success){document.getElementById('modal').classList.remove('open');await loadPhotos()}};
+function showMode(mode){
+  if(mode==='upload') mode='photos';
+  const views={status:'view-status',photos:'view-photos',system:'view-system',wireless:'view-wireless',interfaces:'view-interfaces'};
+  if(!views[mode]) mode='photos';
+  document.querySelectorAll('.view-panel').forEach(el=>el.classList.toggle('active',el.id===views[mode]));
+  if(mode==='system')loadSettings();
+  if(mode==='status')loadOverview();
+  if(mode==='wireless'){loadSavedList();loadAPList();}
+  if(mode==='interfaces')loadIface();
+  if(window.inkLuciChrome){
+    window.inkLuciChrome.setRouteHash(mode);
+    window.inkLuciChrome.scrollContentTop();
+    window.inkLuciChrome.syncActive();
+  }else if(location.hash!=='#'+mode){
+    location.hash=mode;
+  }
+}
+window.addEventListener('hashchange',()=>{const m=(location.hash||'#photos').slice(1);showMode(['status','photos','upload','system','wireless','interfaces'].includes(m)?m:'photos');});
+const WXR=[[0,'关闭'],[30,'30分钟'],[60,'1小时'],[120,'2小时'],[180,'3小时'],[360,'6小时']];document.querySelectorAll('.wxsel').forEach(s=>{s.classList.add('cbi-input-text');s.innerHTML=WXR.map(([v,t])=>`<option value="${v}">${t}</option>`).join('')});
+async function loadSettings(){try{const j=await (await fetch('/settings')).json();document.getElementById('dayRefresh').value=String(j.day_refresh_min??60);document.getElementById('nightRefresh').value=String(j.night_refresh_min??0);document.querySelectorAll('input[name=slide]').forEach(r=>r.checked=Number(r.value)===j.slideshow_interval);document.getElementById('weatherCity').value=j.weather_city||'';document.getElementById('bcastTime').value=j.bcast_time||'07:00';document.getElementById('bcastOff').checked=!j.bcast_time;document.getElementById('autoSpeak').checked=!!j.auto_speak;const slide=j.slideshow_interval?`轮播 ${j.slideshow_interval}min`:'轮播关闭';const svc=j.service_running?`服务开启 ${j.url||''}`:'服务将关闭';settingsState.textContent=`${slide} · ${svc}`}catch(e){settingsState.textContent='读取失败'}}
+document.getElementById('saveSettings').onclick=async()=>{const v=Number(document.querySelector('input[name=slide]:checked')?.value||0);const city=document.getElementById('weatherCity').value.trim();const body={slideshow_interval:v};if(city)body.weather_city=city;body.bcast_time=document.getElementById('bcastOff').checked?'':(document.getElementById('bcastTime').value||'');body.auto_speak=document.getElementById('autoSpeak').checked;body.day_refresh_min=Number(document.getElementById('dayRefresh').value);body.night_refresh_min=Number(document.getElementById('nightRefresh').value);const j=await (await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();settingsState.textContent=j.success?`${v?`已保存 ${v}min`:'轮播关闭'} · 城市 ${j.weather_city||''} · 播报 ${j.bcast_time||'关闭'}`:'保存失败'};
+document.getElementById('stopService').onclick=async()=>{if(!confirm('关闭本地传图服务？'))return;await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service_enabled:false})});settingsState.textContent='服务正在关闭'};
+document.getElementById('sleepNow').onclick=async()=>{if(!confirm('关闭服务、WiFi 并进入省电模式？'))return;await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service_enabled:false,wifi_enabled:false,sleep:true})});settingsState.textContent='设备正在进入省电模式'};
+batchBtn.onclick=async()=>{const ids=[...selected];if(!ids.length)return;if(!confirm(`确认删除 ${ids.length} 张图片？`))return;for(const id of ids)await delOne(id);loadPhotos()};document.getElementById('reload').onclick=loadPhotos;
+let ovTimer=null;
+function applyBattery(j){
+  const b=j&&j.battery;
+  const levelEl=document.getElementById('ovBatLevel');
+  const statusEl=document.getElementById('ovBatStatus');
+  const fill=document.getElementById('ovBatFill');
+  const text=document.getElementById('ovBatText');
+  if(!levelEl||!statusEl||!fill||!text) return;
+  const level=b&&b.ok!==false&&b.level!=null?Number(b.level):-1;
+  if(level<0||Number.isNaN(level)){
+    levelEl.textContent='--';
+    statusEl.textContent=(b&&b.status)||'未知';
+    fill.style.width='0%';
+    fill.classList.remove('low','medium');
+    text.textContent='--';
+    return;
+  }
+  const pct=Math.max(0,Math.min(100,level));
+  levelEl.textContent=pct+'%';
+  statusEl.textContent=b.status||(b.charging?'充电中':(b.discharging?'放电中':'待机'));
+  fill.style.width=pct+'%';
+  fill.classList.toggle('low',pct<20);
+  fill.classList.toggle('medium',pct>=20&&pct<50);
+  text.textContent=b.voltage_mv?pct+'% · '+b.voltage_mv+' mV':pct+'%';
+}
+function applyOverview(j){
+  const boot=j.boot_time?`（${j.boot_time}）`:'';
+  document.getElementById('ovUptime').textContent=(j.uptime||'—')+boot;
+  document.getElementById('ovLocal').textContent=j.local_time||'—';
+  document.getElementById('ovModel').textContent=j.model||'—';
+  document.getElementById('ovVersion').textContent=j.version||'—';
+  applyBattery(j);
+}
+async function loadOverview(){
+  try{
+    applyOverview(await (await fetch('/system/overview',{cache:'no-store'})).json());
+  }catch(e){
+    document.getElementById('ovUptime').textContent='读取失败';
+    applyBattery(null);
+  }
+  if(ovTimer) clearInterval(ovTimer);
+  ovTimer=setInterval(async()=>{
+    try{
+      applyOverview(await (await fetch('/system/overview',{cache:'no-store'})).json());
+    }catch(e){}
+  },1000);
+}
+function renderSavedList(data){
+  const box=document.getElementById('saved_list_container');
+  const saved=document.getElementById('saved_list');
+  saved.innerHTML='';
+  const head=document.createElement('div');
+  head.className='tr cbi-section-table-titles';
+  head.innerHTML='<div class="th">SSID</div><div class="th"></div>';
+  saved.appendChild(head);
+  (data||[]).forEach((ssid,index)=>{
+    const tr=document.createElement('div');
+    tr.className='tr';
+    let actions=`<button type="button" class="cbi-button cbi-button-remove" data-i="${index}">×</button>`;
+    if(index>0) actions=`<button type="button" class="cbi-button" data-d="${index}">↑</button> `+actions;
+    tr.innerHTML=`<div class="td"></div><div class="td cbi-section-actions">${actions}</div>`;
+    tr.querySelector('.td').textContent=ssid;
+    saved.appendChild(tr);
+  });
+  box.style.display=(data&&data.length)?'block':'none';
+  saved.querySelectorAll('[data-i]').forEach(btn=>btn.onclick=()=>fetch('/saved/delete?index='+btn.dataset.i).then(()=>loadSavedList()));
+  saved.querySelectorAll('[data-d]').forEach(btn=>btn.onclick=()=>fetch('/saved/set_default?index='+btn.dataset.d).then(()=>loadSavedList()));
+}
+async function loadSavedList(){try{renderSavedList(await (await fetch('/saved/list')).json())}catch(e){}}
+async function loadAPList(){
+  const apList=document.getElementById('ap_list');
+  apList.innerHTML='<p class="scanning">扫描中...</p>';
+  try{
+    const data=await (await fetch('/scan')).json();
+    apList.innerHTML='<p class="cbi-section-descr">从下面列表选择 Wi-Fi:</p>';
+    const table=document.createElement('div');
+    table.className='table cbi-section-table';
+    table.innerHTML='<div class="tr cbi-section-table-titles"><div class="th">SSID</div><div class="th">RSSI</div><div class="th"></div></div>';
+    (data.aps||[]).forEach(ap=>{
+      const tr=document.createElement('div');
+      tr.className='tr';
+      tr.innerHTML=`<div class="td cbi-section-table-cell ssid"></div><div class="td">${ap.rssi} dBm</div><div class="td">${ap.authmode===0?'Open':'PSK'}</div>`;
+      tr.querySelector('.ssid').textContent=ap.ssid;
+      tr.querySelector('.ssid').onclick=()=>{document.getElementById('lanSsid').value=ap.ssid};
+      table.appendChild(tr);
+    });
+    apList.appendChild(table);
+  }catch(e){apList.innerHTML='<p class="alert-message error">扫描失败</p>'}
+}
+document.getElementById('lanScan').onclick=()=>{loadSavedList();loadAPList();};
+document.getElementById('lanConnect').onclick=async()=>{
+  const err=document.getElementById('wifiError');
+  err.style.display='none';
+  try{
+    const j=await (await fetch('/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:document.getElementById('lanSsid').value,password:document.getElementById('lanPassword').value})})).json();
+    if(!j.success){err.textContent=j.error||'失败';err.style.display='block';return;}
+    await loadSavedList();
+    err.className='alert-message success';err.textContent='已保存，下次扫描时将尝试连接';err.style.display='block';
+  }catch(e){err.className='alert-message error';err.textContent='网络错误';err.style.display='block';}
+};
+function pickLiveIpv6(live){
+  if(live.ipv6_preferred) return live.ipv6_preferred;
+  const arr=Array.isArray(live.ipv6)?live.ipv6:[];
+  const glob=arr.find(a=>a&&!String(a).toLowerCase().startsWith('fe80:'));
+  return glob||arr[0]||'';
+}
+function applyIpv4Hints(live){
+  const addr=live.ipv4||'';
+  const mask=live.netmask||'';
+  const gw=live.gateway||'';
+  const bcast=live.broadcast||'';
+  document.getElementById('ifaceIpv4').placeholder=addr||'';
+  document.getElementById('ifaceMask').placeholder=mask||'255.255.255.0';
+  document.getElementById('ifaceGw').placeholder=gw||'';
+  document.getElementById('ifaceBcast').placeholder=bcast||'';
+  const liveEl=document.getElementById('ifaceIpv4Live');
+  if(liveEl){
+    const parts=[];
+    if(addr) parts.push(mask?addr+'/'+mask:addr);
+    if(gw) parts.push('网关 '+gw);
+    liveEl.textContent=parts.length?('当前 '+parts.join(' · ')):'当前未获取到 IPv4 地址';
+  }
+}
+function applyIpv6Hints(live){
+  const addr=pickLiveIpv6(live);
+  const gw=live.ipv6_gateway||'';
+  const plen=live.ipv6_prefix||'64';
+  document.getElementById('ifaceIpv6').placeholder=addr||'';
+  document.getElementById('ifaceIpv6Gw').placeholder=gw||'';
+  document.getElementById('ifaceIpv6Plen').placeholder=String(plen);
+  const liveEl=document.getElementById('ifaceIpv6Live');
+  if(liveEl){
+    const parts=[];
+    if(addr) parts.push(plen?addr+'/'+plen:addr);
+    if(gw) parts.push('网关 '+gw);
+    liveEl.textContent=parts.length?('当前 '+parts.join(' · ')):'当前未获取到 IPv6 地址';
+  }
+}
+function protoToIpv4Mode(proto){return proto==='static'?'static':'auto'}
+function ipv4ModeToProto(mode){return mode==='static'?'static':'dhcp'}
+function syncIfaceForm(){
+  const proto=document.getElementById('ifaceProto').value;
+  const v4=document.getElementById('ifaceIpv4Mode').value;
+  const v6=document.getElementById('ifaceIpv6Mode').value;
+  document.getElementById('ifaceHostnameRow').style.display=proto==='dhcp'?'flex':'none';
+  document.getElementById('ifacePeerdnsRow').style.display=proto==='dhcp'?'flex':'none';
+  document.getElementById('ifaceIpv4Static').style.display=v4==='static'?'block':'none';
+  document.getElementById('ifaceIpv6Static').style.display=v6==='static'?'block':'none';
+}
+async function loadIface(){
+  try{
+    const j=await (await fetch('/network/interface',{cache:'no-store'})).json();
+    const c=j.config||{}, live=j.live||{};
+    document.getElementById('ifaceProto').value=c.proto||'dhcp';
+    document.getElementById('ifaceIpv4Mode').value=protoToIpv4Mode(c.proto||'dhcp');
+    document.getElementById('ifaceHostname').value=c.hostname||live.hostname||'';
+    document.getElementById('ifaceIpv4').value=c.ipv4||'';
+    document.getElementById('ifaceMask').value=c.netmask||'255.255.255.0';
+    document.getElementById('ifaceGw').value=c.gateway||'';
+    document.getElementById('ifaceBcast').value=c.broadcast||'';
+    document.getElementById('ifaceUseGw').checked=c.use_default_gateway!==false;
+    document.getElementById('ifacePeerdns').checked=c.peerdns!==false;
+    const dns=c.dns||[];
+    document.getElementById('ifaceDns0').value=dns[0]||'';
+    document.getElementById('ifaceDns1').value=dns[1]||'';
+    document.getElementById('ifaceIpv6Mode').value=c.ipv6_mode||'auto';
+    document.getElementById('ifaceIpv6').value=c.ipv6||'';
+    document.getElementById('ifaceIpv6Plen').value=c.ipv6_prefix||'64';
+    document.getElementById('ifaceIpv6Gw').value=c.ipv6_gateway||'';
+    applyIpv4Hints(live);
+    applyIpv6Hints(live);
+    syncIfaceForm();
+  }catch(e){document.getElementById('ifaceMsg').style.display='block';document.getElementById('ifaceMsg').textContent='读取失败';}
+  syncIfaceForm();
+}
+document.getElementById('ifaceProto').onchange=()=>{
+  document.getElementById('ifaceIpv4Mode').value=protoToIpv4Mode(document.getElementById('ifaceProto').value);
+  syncIfaceForm();
+};
+document.getElementById('ifaceIpv4Mode').onchange=()=>{
+  document.getElementById('ifaceProto').value=ipv4ModeToProto(document.getElementById('ifaceIpv4Mode').value);
+  syncIfaceForm();
+};
+document.getElementById('ifaceIpv6Mode').onchange=syncIfaceForm;
+document.getElementById('ifaceSave').onclick=async()=>{
+  const msg=document.getElementById('ifaceMsg');
+  msg.style.display='none';
+  const body={
+    proto:document.getElementById('ifaceProto').value,
+    hostname:document.getElementById('ifaceHostname').value.trim(),
+    ipv4:document.getElementById('ifaceIpv4').value.trim(),
+    netmask:document.getElementById('ifaceMask').value.trim(),
+    gateway:document.getElementById('ifaceGw').value.trim(),
+    broadcast:document.getElementById('ifaceBcast').value.trim(),
+    use_default_gateway:document.getElementById('ifaceUseGw').checked,
+    peerdns:document.getElementById('ifacePeerdns').checked,
+    dns:[document.getElementById('ifaceDns0').value.trim(),document.getElementById('ifaceDns1').value.trim()],
+    ipv6_mode:document.getElementById('ifaceIpv6Mode').value,
+    ipv6:document.getElementById('ifaceIpv6').value.trim(),
+    ipv6_prefix:document.getElementById('ifaceIpv6Plen').value,
+    ipv6_gateway:document.getElementById('ifaceIpv6Gw').value.trim()
+  };
+  try{
+    const j=await (await fetch('/network/interface',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    msg.className=j.success?'alert-message warning':'alert-message error';
+    msg.textContent=j.success?'正在应用，页面可能短暂断开':'保存失败';
+    msg.style.display='block';
+    if(j.success) setTimeout(loadIface,1500);
+  }catch(e){msg.className='alert-message error';msg.textContent='网络错误';msg.style.display='block';}
+};
+loadStatus();loadSettings();loadPhotos();syncIfaceForm();
+syncAlgoRow();
+__LUCI_THEME_JS__
+const bootMode=(location.hash||'#photos').slice(1);
+showMode(['status','photos','upload','system','wireless','interfaces'].includes(bootMode)?bootMode:'photos');
+</script>
+</body>
+</html>

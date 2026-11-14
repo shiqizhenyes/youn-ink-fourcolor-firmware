@@ -5,9 +5,16 @@
 
 #include "ap_transfer_server.h"
 #include "boards/zectrix-s3-epaper-4.2/config.h"
+#include "common/qweather_client.h"
+#include "common/weather_prefs.h"
 #include "common/photo_storage.h"
+#include "common/power_diag.h"
+#include "board.h"
 #include "settings.h"
 #include "wifi_manager.h"
+#include "ssid_manager.h"
+#include "wifi_credentials.h"
+#include "netif_config.h"
 
 #include <esp_log.h>
 #include <esp_wifi.h>
@@ -27,6 +34,7 @@
 #include <new>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace rawdraw {
 
@@ -46,53 +54,12 @@ constexpr int kScreenHeight = 300;
 constexpr size_t kImage1bppSize = kScreenWidth * kScreenHeight / 8;
 constexpr size_t kImage2bppSize = kScreenWidth * kScreenHeight * 2 / 8;
 
-// Embedded HTML. Kept self-contained because the ESP-IDF HTTP server serves
-// this page from flash while the device is in AP mode.
-const char kUploadHtml[] = R"HTML(
-<!DOCTYPE html><html><head><meta charset="UTF-8"><title>墨水屏传图</title>
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<style>
-*{box-sizing:border-box}body{margin:0;background:#ece8dc;color:#171717;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:12px}.app{max-width:520px;margin:0 auto;padding:10px}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}.brand{font-weight:800;font-size:16px}.pill{border:1px solid #111;background:#ffd900;border-radius:3px;padding:3px 6px;font-size:11px}.panel{background:#fff;border:2px solid #111;border-radius:6px;box-shadow:3px 3px 0 #111;margin-bottom:10px;padding:9px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.muted{color:#555}.btn{border:2px solid #111;background:#ff3b30;color:#fff;border-radius:5px;padding:8px 10px;font-weight:800;font-size:12px;box-shadow:2px 2px 0 #111}.btn.secondary{background:#fff;color:#111}.btn.yellow{background:#ffd900;color:#111}.btn.danger{background:#111;color:#fff}.btn.icon{width:32px;height:32px;border-radius:50%;padding:0;font-size:18px;line-height:1}.btn:disabled{opacity:.45}.file{position:absolute;left:-9999px}.radio{display:inline-flex;gap:5px;align-items:center;border:1px solid #111;border-radius:4px;padding:5px 7px;background:#fafafa}.radio input{margin:0}.preview{width:100%;aspect-ratio:4/3;border:2px solid #111;background:#fff;image-rendering:pixelated;margin-top:8px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.card{border:2px solid #111;border-radius:5px;background:#fff;overflow:hidden;position:relative}.thumb{width:100%;aspect-ratio:4/3;background:#f8f8f8;display:block;image-rendering:pixelated}.meta{padding:6px}.title{font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.body{font-size:11px;color:#444;line-height:1.35;height:30px;overflow:hidden}.check{position:absolute;top:5px;left:5px;width:20px;height:20px}.tag{position:absolute;top:5px;right:5px;background:#ffd900;border:1px solid #111;border-radius:3px;padding:2px 4px;font-size:10px}.bar{display:flex;align-items:center;justify-content:space-between;gap:6px;margin:8px 0}.status{min-height:18px;color:#333}.note{border:2px solid #111;background:#fffbe6;border-radius:6px;padding:9px;margin-bottom:10px;box-shadow:3px 3px 0 #111}.note ul{margin:6px 0 0 18px;padding:0;line-height:1.55}.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;padding:12px}.modal.open{display:flex}.dialog{max-width:520px;width:100%;background:#fff;border:2px solid #111;border-radius:7px;box-shadow:4px 4px 0 #111;position:relative;padding:10px}.close{position:absolute;right:8px;top:8px;border:2px solid #111;background:#fff;border-radius:50%;width:28px;height:28px;font-weight:900}.big{width:100%;aspect-ratio:4/3;border:2px solid #111;image-rendering:pixelated}.empty{padding:18px;text-align:center;border:1px dashed #999;background:#fafafa}.split{display:grid;grid-template-columns:1fr;gap:8px}@media(min-width:460px){.split{grid-template-columns:190px 1fr}.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
-</style></head><body><main class="app">
-<div class="top"><div><div class="brand">墨水屏传图</div><div class="muted" id="endpoint">读取服务地址...</div></div><div class="row"><button class="btn secondary" id="settingsBtn">设置</button><button class="btn secondary icon" id="helpBtn">!</button><div class="pill">400x300</div></div></div>
-<section class="note" id="helpPanel" style="display:none"><b>功能说明</b><ul><li>支持 1 BP 黑白和 2 BP 四色图片上传，保存后可在设备相册查看。</li><li>轮播关闭后，大图会固定停在当前图片；开启后，设备在相册大图模式按周期自动切换。</li><li>局域网服务开启时，页面顶部会显示设备本地 IP，可用手机或 NAS/本地 server 管理图片。</li><li>关闭服务只停止本地传图网页；关闭并省电会停止服务和 WiFi，进入 deep sleep，按 BOOT 唤醒。</li><li>极致省电建议：选好大图，关闭轮播，再执行关闭并省电，墨水屏会保留最后画面。</li></ul></section>
-<section class="panel split"><div><div class="title">发送图片</div><p class="muted">先选择图片，预览转换效果，再发送到设备。</p><div class="row"><label class="radio"><input name="fmt" type="radio" value="1bpp" checked>1 BP 黑白</label><label class="radio"><input name="fmt" type="radio" value="bwry2bpp">2 BP 四色</label></div><div class="row" style="margin-top:8px"><button class="btn yellow" id="pick">选择图片</button><button class="btn" id="send" disabled>发送</button></div><input class="file" id="file" type="file" accept="image/*"><div class="status" id="status">等待选择</div></div><div><canvas class="preview" id="preview" width="400" height="300"></canvas></div></section>
-<section class="panel" id="settingsPanel" style="display:none"><div class="bar"><b>相册轮播周期</b><span class="muted" id="settingsState"></span></div><div class="row"><label class="radio"><input name="slide" type="radio" value="0">关闭</label><label class="radio"><input name="slide" type="radio" value="5">5min</label><label class="radio"><input name="slide" type="radio" value="10">10min</label><label class="radio"><input name="slide" type="radio" value="30">30min</label><button class="btn yellow" id="saveSettings">保存设置</button><button class="btn secondary" id="stopService">关闭服务</button><button class="btn danger" id="sleepNow">关闭并省电</button></div></section>
-<section class="panel"><div class="bar"><div><b>设备图片</b> <span class="muted" id="count"></span></div><div class="row"><button class="btn secondary" id="reload">刷新</button><button class="btn danger" id="batch" disabled>删除选中</button></div></div><div id="photos" class="grid"><div class="empty">读取中...</div></div></section>
-</main>
-<div class="modal" id="modal"><div class="dialog"><button class="close" id="close">×</button><canvas class="big" id="big" width="400" height="300"></canvas><div class="meta"><input id="mTitle" style="width:100%;padding:7px;border:1px solid #111;font-weight:800"><div class="row" style="margin-top:6px"><input id="mDate" placeholder="日期" style="flex:1;padding:7px;border:1px solid #111"><input id="mLocation" placeholder="地点" style="flex:1;padding:7px;border:1px solid #111"></div><textarea id="mBody" rows="3" style="width:100%;margin-top:6px;padding:7px;border:1px solid #111"></textarea><div class="muted" id="mMeta" style="margin-top:5px"></div><div class="row" style="margin-top:8px"><button class="btn yellow" id="mSave">保存信息</button><button class="btn secondary" id="mUp">上移</button><button class="btn secondary" id="mDown">下移</button><button class="btn danger" id="mDelete">删除这张</button></div></div></div></div>
-<script>
-const W=400,H=300,photosEl=document.getElementById('photos'),statusEl=document.getElementById('status'),pv=document.getElementById('preview'),fileEl=document.getElementById('file'),sendBtn=document.getElementById('send'),batchBtn=document.getElementById('batch'),countEl=document.getElementById('count'),settingsPanel=document.getElementById('settingsPanel'),settingsState=document.getElementById('settingsState'),endpointEl=document.getElementById('endpoint');let pending=null,pendingFmt='1bpp',items=[],selected=new Set(),active=null;
-async function loadStatus(){try{const j=await (await fetch('/status')).json();endpointEl.textContent=`${j.mode==='lan'?'LAN':'InkScreen-AP'} / ${j.ip}`;document.title=`墨水屏传图 ${j.ip}`}catch(e){endpointEl.textContent='服务地址读取失败'}}
-function fmt(){return document.querySelector('input[name=fmt]:checked').value}
-function rgba(c){return c===0?[0,0,0]:c===1?[255,255,255]:c===2?[255,217,0]:[220,0,0]}
-function draw1(buf,canvas){const ctx=canvas.getContext('2d'),img=ctx.createImageData(W,H),d=img.data;for(let p=0,i=0;p<W*H;p++,i+=4){const v=(buf[p>>3]&(1<<(7-(p&7))))?255:0;d[i]=d[i+1]=d[i+2]=v;d[i+3]=255}ctx.putImageData(img,0,0)}
-function draw2(buf,canvas){const ctx=canvas.getContext('2d'),img=ctx.createImageData(W,H),d=img.data;for(let p=0,i=0;p<W*H;p++,i+=4){const b=buf[p>>2],c=(b>>(6-((p&3)*2)))&3,r=rgba(c);d[i]=r[0];d[i+1]=r[1];d[i+2]=r[2];d[i+3]=255}ctx.putImageData(img,0,0)}
-function fitImage(file){return new Promise((res,rej)=>{const img=new Image();img.onload=()=>{const c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d',{willReadFrequently:true});x.fillStyle='#fff';x.fillRect(0,0,W,H);const s=Math.min(W/img.width,H/img.height),w=Math.round(img.width*s),h=Math.round(img.height*s);x.drawImage(img,(W-w)/2,(H-h)/2,w,h);URL.revokeObjectURL(img.src);res(x.getImageData(0,0,W,H).data)};img.onerror=rej;img.src=URL.createObjectURL(file)})}
-async function convert(file){const data=await fitImage(file),mode=fmt();pendingFmt=mode;if(mode==='bwry2bpp'){const work=new Array(H);for(let y=0;y<H;y++){work[y]=new Array(W);for(let x=0;x<W;x++){const i=(y*W+x)*4;work[y][x]={r:data[i],g:data[i+1],b:data[i+2]}}}const pal=[[0,0,0],[255,255,255],[255,0,0],[255,255,0]];const out=new Uint8Array(30000);for(let y=0;y<H;y++)for(let x=0;x<W;x++){const old=work[y][x];let minD=1e9,cIdx=0,cRgb=pal[0];for(let k=0;k<4;k++){const d=0.299*(old.r-pal[k][0])**2+0.587*(old.g-pal[k][1])**2+0.114*(old.b-pal[k][2])**2;if(d<minD){minD=d;cIdx=k;cRgb=pal[k]}}const bwry=cIdx===0?0:cIdx===1?1:cIdx===2?3:2;out[(y*W+x)>>2]|=bwry<<(6-((y*W+x)&3)*2);const eR=old.r-cRgb[0],eG=old.g-cRgb[1],eB=old.b-cRgb[2];const dist=(dy,dx,f)=>{const ny=y+dy,nx=x+dx;if(ny>=0&&ny<H&&nx>=0&&nx<W){work[ny][nx].r+=eR*f;work[ny][nx].g+=eG*f;work[ny][nx].b+=eB*f}};dist(0,1,7/16);dist(1,-1,3/16);dist(1,0,5/16);dist(1,1,1/16)}draw2(out,pv);return out}const gray=new Int16Array(W*H);for(let p=0,i=0;p<gray.length;p++,i+=4)gray[p]=(data[i]*30+data[i+1]*59+data[i+2]*11)/100|0;const out=new Uint8Array(15000);for(let y=0;y<H;y++)for(let x=0;x<W;x++){const p=y*W+x,old=Math.max(0,Math.min(255,gray[p])),nw=old>128?255:0,err=old-nw;if(nw>128)out[p>>3]|=1<<(7-(p&7));if(x+1<W)gray[p+1]+=err*7/16;if(y+1<H){if(x>0)gray[p+W-1]+=err*3/16;gray[p+W]+=err*5/16;if(x+1<W)gray[p+W+1]+=err/16}}draw1(out,pv);return out}
-document.getElementById('pick').onclick=()=>fileEl.click();fileEl.onchange=async()=>{const f=fileEl.files[0];if(!f)return;statusEl.textContent='转换中...';try{pending=await convert(f);sendBtn.disabled=false;statusEl.textContent=`已预览 ${pendingFmt==='bwry2bpp'?'2 BP 四色':'1 BP 黑白'}，确认后点击发送`}catch(e){statusEl.textContent='图片处理失败';sendBtn.disabled=true}};document.querySelectorAll('input[name=fmt]').forEach(r=>r.onchange=()=>{if(fileEl.files[0])fileEl.onchange()});
-sendBtn.onclick=async()=>{if(!pending)return;sendBtn.disabled=true;statusEl.textContent='上传中...';try{const r=await fetch('/upload?format='+encodeURIComponent(pendingFmt),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:pending});const j=await r.json();statusEl.textContent=j.success?'已发送并保存':'失败: '+(j.error||'unknown');await loadPhotos()}catch(e){statusEl.textContent='网络错误'}sendBtn.disabled=false};
-async function loadBin(p,c){const b=new Uint8Array(await (await fetch('/photo?id='+encodeURIComponent(p.id),{cache:'no-store'})).arrayBuffer());(p.format==='bwry2bpp'||p.size>15000?draw2:draw1)(b,c)}
-function updateBatch(){batchBtn.disabled=selected.size===0}
-async function loadPhotos(){selected.clear();updateBatch();try{const j=await (await fetch('/photos',{cache:'no-store'})).json();items=j.photos||[];countEl.textContent=`${items.length} 张`;photosEl.innerHTML=items.length?'':'<div class="empty">暂无图片</div>';const thumbs=[];for(const p of items){const card=document.createElement('div');card.className='card';card.innerHTML=`<input class="check" type="checkbox"><span class="tag">${p.format==='bwry2bpp'?'2BP':'1BP'}</span><canvas class="thumb" width="400" height="300"></canvas><div class="meta"><div class="title">${p.title||p.id}</div><div class="body">${p.body||''}</div><div class="muted">${p.date||''} ${p.location||''}</div><div class="row" style="margin-top:5px"><button class="btn yellow show">展示</button><button class="btn secondary up">上移</button><button class="btn secondary down">下移</button></div></div>`;const c=card.querySelector('canvas'),ck=card.querySelector('input');ck.onclick=e=>{e.stopPropagation();ck.checked?selected.add(p.id):selected.delete(p.id);updateBatch()};card.querySelector('.show').onclick=e=>{e.stopPropagation();showPhoto(p.id)};card.querySelector('.up').onclick=e=>{e.stopPropagation();movePhoto(p.id,-1)};card.querySelector('.down').onclick=e=>{e.stopPropagation();movePhoto(p.id,1)};card.onclick=()=>openModal(p);photosEl.appendChild(card);thumbs.push([p,c])}for(const [p,c] of thumbs){await loadBin(p,c).catch(()=>{})}}catch(e){photosEl.innerHTML='<div class="empty">读取失败</div>'}}
-function openModal(p){active=p;document.getElementById('modal').classList.add('open');document.getElementById('mTitle').value=p.title||'';document.getElementById('mDate').value=p.date||'';document.getElementById('mLocation').value=p.location||'';document.getElementById('mMeta').textContent=`${p.format==='bwry2bpp'?'2 BP 四色':'1 BP 黑白'} · ${p.width}x${p.height}`;document.getElementById('mBody').value=p.body||'';loadBin(p,document.getElementById('big')).catch(()=>{})}
-document.getElementById('close').onclick=()=>document.getElementById('modal').classList.remove('open');document.getElementById('modal').onclick=e=>{if(e.target.id==='modal')document.getElementById('modal').classList.remove('open')};
-async function delOne(id){return fetch('/photo?id='+encodeURIComponent(id),{method:'DELETE'}).then(r=>r.json())}
-document.getElementById('mDelete').onclick=async()=>{if(!active)return;if(!confirm('确认删除这张图片？'))return;await delOne(active.id);document.getElementById('modal').classList.remove('open');loadPhotos()};
-async function movePhoto(id,delta){await fetch('/photos/move',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,delta})});await loadPhotos()}
-async function showPhoto(id){const j=await (await fetch('/photo/show',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})})).json();statusEl.textContent=j.success?'已切到设备大图':'展示失败'}
-document.getElementById('mUp').onclick=()=>active&&movePhoto(active.id,-1);
-document.getElementById('mDown').onclick=()=>active&&movePhoto(active.id,1);
-document.getElementById('mSave').onclick=async()=>{if(!active)return;const body={id:active.id,title:document.getElementById('mTitle').value,date:document.getElementById('mDate').value,location:document.getElementById('mLocation').value,body:document.getElementById('mBody').value};const r=await fetch('/photo/meta',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if((await r.json()).success){document.getElementById('modal').classList.remove('open');await loadPhotos()}};
-document.getElementById('settingsBtn').onclick=()=>{settingsPanel.style.display=settingsPanel.style.display==='none'?'block':'none';loadSettings()};
-document.getElementById('helpBtn').onclick=()=>{const p=document.getElementById('helpPanel');p.style.display=p.style.display==='none'?'block':'none'};
-async function loadSettings(){try{const j=await (await fetch('/settings')).json();document.querySelectorAll('input[name=slide]').forEach(r=>r.checked=Number(r.value)===j.slideshow_interval);const slide=j.slideshow_interval?`轮播 ${j.slideshow_interval}min`:'轮播关闭';const svc=j.service_running?`服务开启 ${j.url||''}`:'服务将关闭';settingsState.textContent=`${slide} · ${svc}`}catch(e){settingsState.textContent='读取失败'}}
-document.getElementById('saveSettings').onclick=async()=>{const v=Number(document.querySelector('input[name=slide]:checked')?.value||0);const j=await (await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slideshow_interval:v})})).json();settingsState.textContent=j.success?(v?`已保存 ${v}min`:'已关闭'):'保存失败'};
-document.getElementById('stopService').onclick=async()=>{if(!confirm('关闭本地传图服务？'))return;await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service_enabled:false})});settingsState.textContent='服务正在关闭'};
-document.getElementById('sleepNow').onclick=async()=>{if(!confirm('关闭服务、WiFi 并进入省电模式？'))return;await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service_enabled:false,wifi_enabled:false,sleep:true})});settingsState.textContent='设备正在进入省电模式'};
-batchBtn.onclick=async()=>{const ids=[...selected];if(!ids.length)return;if(!confirm(`确认删除 ${ids.length} 张图片？`))return;for(const id of ids)await delOne(id);loadPhotos()};document.getElementById('reload').onclick=loadPhotos;loadStatus();loadSettings();loadPhotos();
-</script></body></html>
-)HTML";
+extern const char photos_html_start[] asm("_binary_photos_html_start");
+extern const char photos_html_end[] asm("_binary_photos_html_end");
+extern const char ble_web_panel_html_start[] asm("_binary_ble_web_panel_html_start");
+extern const char ble_web_panel_html_end[] asm("_binary_ble_web_panel_html_end");
+extern const char layout_adjuster_html_start[] asm("_binary_layout_adjuster_html_start");
+extern const char layout_adjuster_html_end[] asm("_binary_layout_adjuster_html_end");
 
 cJSON* ReadJsonBody(httpd_req_t* req) {
     if (!req || req->content_len == 0 || req->content_len > 2048) return nullptr;
@@ -163,6 +130,8 @@ void DeferredControlTask(void* arg) {
     if (request->enter_sleep) {
         ESP_LOGI(kTag, "Entering deep sleep after web control request");
         esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(BOOT_BUTTON_GPIO), 0);
+        ink::PowerDiag::BeforeDeepSleep(0);
+        Board::GetInstance().PrepareForDeepSleep();
         esp_deep_sleep_start();
     }
     delete request;
@@ -438,7 +407,7 @@ bool ApTransferServer::StartAccessPoint() {
 
 bool ApTransferServer::StartHttpServer() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 28;
     config.max_open_sockets = 4;
     config.recv_wait_timeout = 30;  // Large images take time
     config.send_wait_timeout = 10;
@@ -475,6 +444,14 @@ bool ApTransferServer::StartHttpServer() {
         .user_ctx = this
     };
     if (httpd_register_uri_handler(server_, &status_uri) != ESP_OK) return false;
+
+    httpd_uri_t power_log_uri = {
+        .uri = "/power_log",
+        .method = HTTP_GET,
+        .handler = PowerLogHandler,
+        .user_ctx = this
+    };
+    if (httpd_register_uri_handler(server_, &power_log_uri) != ESP_OK) return false;
 
     httpd_uri_t settings_get_uri = {
         .uri = "/settings",
@@ -540,20 +517,115 @@ bool ApTransferServer::StartHttpServer() {
     };
     if (httpd_register_uri_handler(server_, &photo_show_uri) != ESP_OK) return false;
 
+    httpd_uri_t overview_uri = {
+        .uri = "/system/overview",
+        .method = HTTP_GET,
+        .handler = OverviewHandler,
+        .user_ctx = this
+    };
+    if (httpd_register_uri_handler(server_, &overview_uri) != ESP_OK) return false;
+
+    httpd_uri_t iface_get_uri = {
+        .uri = "/network/interface",
+        .method = HTTP_GET,
+        .handler = InterfaceHandler,
+        .user_ctx = this
+    };
+    if (httpd_register_uri_handler(server_, &iface_get_uri) != ESP_OK) return false;
+
+    httpd_uri_t iface_post_uri = {
+        .uri = "/network/interface",
+        .method = HTTP_POST,
+        .handler = InterfaceHandler,
+        .user_ctx = this
+    };
+    if (httpd_register_uri_handler(server_, &iface_post_uri) != ESP_OK) return false;
+
+    httpd_uri_t scan_uri = {
+        .uri = "/scan",
+        .method = HTTP_GET,
+        .handler = ScanHandler,
+        .user_ctx = this
+    };
+    if (httpd_register_uri_handler(server_, &scan_uri) != ESP_OK) return false;
+
+    httpd_uri_t saved_list_uri = {
+        .uri = "/saved/list",
+        .method = HTTP_GET,
+        .handler = SavedListHandler,
+        .user_ctx = this
+    };
+    if (httpd_register_uri_handler(server_, &saved_list_uri) != ESP_OK) return false;
+
+    httpd_uri_t saved_delete_uri = {
+        .uri = "/saved/delete",
+        .method = HTTP_GET,
+        .handler = SavedDeleteHandler,
+        .user_ctx = this
+    };
+    if (httpd_register_uri_handler(server_, &saved_delete_uri) != ESP_OK) return false;
+
+    httpd_uri_t saved_default_uri = {
+        .uri = "/saved/set_default",
+        .method = HTTP_GET,
+        .handler = SavedSetDefaultHandler,
+        .user_ctx = this
+    };
+    if (httpd_register_uri_handler(server_, &saved_default_uri) != ESP_OK) return false;
+
+    httpd_uri_t submit_uri = {
+        .uri = "/submit",
+        .method = HTTP_POST,
+        .handler = SubmitWifiHandler,
+        .user_ctx = this
+    };
+    if (httpd_register_uri_handler(server_, &submit_uri) != ESP_OK) return false;
+
+    httpd_uri_t ble_uri = {
+        .uri = "/developer/ble",
+        .method = HTTP_GET,
+        .handler = DeveloperBleHandler,
+        .user_ctx = this
+    };
+    if (httpd_register_uri_handler(server_, &ble_uri) != ESP_OK) return false;
+
+    httpd_uri_t layout_uri = {
+        .uri = "/developer/layout",
+        .method = HTTP_GET,
+        .handler = DeveloperLayoutHandler,
+        .user_ctx = this
+    };
+    if (httpd_register_uri_handler(server_, &layout_uri) != ESP_OK) return false;
+
     ESP_LOGI(kTag, "HTTP server started at http://%s/", ap_ip_.c_str());
     return true;
 }
 
+namespace {
+std::function<void()> s_activity_callback;
+}  // namespace
+
+void ApTransferServer::SetActivityCallback(std::function<void()> callback) {
+    s_activity_callback = std::move(callback);
+}
+
+void ApTransferServer::NotifyActivity() {
+    if (s_activity_callback) s_activity_callback();
+}
+
 esp_err_t ApTransferServer::IndexHandler(httpd_req_t* req) {
+    NotifyActivity();
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_hdr(req, "Connection", "close");
-    esp_err_t ret = httpd_resp_send(req, kUploadHtml, strlen(kUploadHtml));
+    const size_t html_len = static_cast<size_t>(photos_html_end - photos_html_start);
+    esp_err_t ret = httpd_resp_send(req, photos_html_start, html_len);
     CloseCurrentSession(req);
     return ret;
 }
 
 esp_err_t ApTransferServer::UploadHandler(httpd_req_t* req) {
+    NotifyActivity();
     auto* self = static_cast<ApTransferServer*>(req->user_ctx);
     
     self->NotifyState(kReceivingImage, "Receiving image...");
@@ -669,7 +741,14 @@ esp_err_t ApTransferServer::StatusHandler(httpd_req_t* req) {
     return ESP_OK;
 }
 
+esp_err_t ApTransferServer::PowerLogHandler(httpd_req_t* req) {
+    const std::string body = ink::PowerDiag::HistoryJson();
+    SendJson(req, body.c_str());
+    return ESP_OK;
+}
+
 esp_err_t ApTransferServer::SettingsHandler(httpd_req_t* req) {
+    NotifyActivity();
     auto* self = static_cast<ApTransferServer*>(req->user_ctx);
     Settings nvs(kGalleryNamespace, req->method == HTTP_POST);
     int interval = nvs.GetInt(kSlideshowIntervalKey, 5);
@@ -695,6 +774,39 @@ esp_err_t ApTransferServer::SettingsHandler(httpd_req_t* req) {
             }
             ESP_LOGI(kTag, "AP settings updated: slideshow_interval=%d", interval);
         }
+        cJSON* city_item = cJSON_GetObjectItemCaseSensitive(root, "weather_city");
+        if (cJSON_IsString(city_item) && city_item->valuestring) {
+            const std::string city = city_item->valuestring;
+            auto& weather = ink::QWeatherClient::GetInstance();
+            if (!city.empty() && city.size() <= 48 && city != weather.GetCity()) {
+                weather.SetCity(city);
+                weather.RequestFetch(true);
+                ESP_LOGI(kTag, "AP settings updated: weather_city=%s", city.c_str());
+            }
+        }
+        cJSON* bcast_item = cJSON_GetObjectItemCaseSensitive(root, "bcast_time");
+        if (cJSON_IsString(bcast_item) && bcast_item->valuestring) {
+            // "" (or anything unparsable) turns the daily announcement off.
+            const int minute = ink::ParseBroadcastTime(bcast_item->valuestring);
+            ink::SetBroadcastMinute(minute);
+            ESP_LOGI(kTag, "AP settings updated: bcast_time=%s",
+                     ink::FormatBroadcastTime(minute).c_str());
+        }
+        cJSON* speak_item = cJSON_GetObjectItemCaseSensitive(root, "auto_speak");
+        if (cJSON_IsBool(speak_item)) {
+            ink::SetAutoSpeak(cJSON_IsTrue(speak_item));
+            ESP_LOGI(kTag, "AP settings updated: auto_speak=%d", cJSON_IsTrue(speak_item) ? 1 : 0);
+        }
+        cJSON* day_item = cJSON_GetObjectItemCaseSensitive(root, "day_refresh_min");
+        if (cJSON_IsNumber(day_item)) {
+            ink::SetDayRefreshMin(day_item->valueint);
+            ESP_LOGI(kTag, "AP settings updated: day_refresh_min=%d", ink::GetDayRefreshMin());
+        }
+        cJSON* night_item = cJSON_GetObjectItemCaseSensitive(root, "night_refresh_min");
+        if (cJSON_IsNumber(night_item)) {
+            ink::SetNightRefreshMin(night_item->valueint);
+            ESP_LOGI(kTag, "AP settings updated: night_refresh_min=%d", ink::GetNightRefreshMin());
+        }
         cJSON* service_item = cJSON_GetObjectItemCaseSensitive(root, "service_enabled");
         if (cJSON_IsBool(service_item) && !cJSON_IsTrue(service_item)) {
             close_service = true;
@@ -718,19 +830,29 @@ esp_err_t ApTransferServer::SettingsHandler(httpd_req_t* req) {
         mode = self->mode_ == TransferMode::kLan ? "lan" : "ap";
         ip = self->ap_ip_.empty() ? kApIp : self->ap_ip_.c_str();
     }
-    char response[256];
-    snprintf(response, sizeof(response),
-             "{\"success\":true,\"slideshow_interval\":%d,\"service_running\":%s,"
-             "\"mode\":\"%s\",\"ip\":\"%s\",\"url\":\"http://%s/\","
-             "\"closing\":%s,\"sleep\":%s}",
-             interval,
-             self && self->IsRunning() ? "true" : "false",
-             mode,
-             ip,
-             ip,
-             close_service ? "true" : "false",
-             enter_sleep ? "true" : "false");
-    SendJson(req, response);
+    const std::string url = std::string("http://") + ip + "/";
+    cJSON* resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "success", true);
+    cJSON_AddNumberToObject(resp, "slideshow_interval", interval);
+    cJSON_AddBoolToObject(resp, "service_running", self && self->IsRunning());
+    cJSON_AddStringToObject(resp, "mode", mode);
+    cJSON_AddStringToObject(resp, "ip", ip);
+    cJSON_AddStringToObject(resp, "url", url.c_str());
+    cJSON_AddStringToObject(resp, "weather_city", ink::QWeatherClient::GetInstance().GetCity().c_str());
+    const int bcast_minute = ink::GetBroadcastMinute();
+    cJSON_AddStringToObject(resp, "bcast_time",
+                            bcast_minute == ink::kBroadcastOff
+                                ? ""
+                                : ink::FormatBroadcastTime(bcast_minute).c_str());
+    cJSON_AddBoolToObject(resp, "auto_speak", ink::GetAutoSpeak());
+    cJSON_AddNumberToObject(resp, "day_refresh_min", ink::GetDayRefreshMin());
+    cJSON_AddNumberToObject(resp, "night_refresh_min", ink::GetNightRefreshMin());
+    cJSON_AddBoolToObject(resp, "closing", close_service);
+    cJSON_AddBoolToObject(resp, "sleep", enter_sleep);
+    char* response = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    SendJson(req, response ? response : "{\"success\":false,\"error\":\"oom\"}");
+    if (response) cJSON_free(response);
     if (close_service || stop_wifi || enter_sleep) {
         ESP_LOGI(kTag, "Web control requested: close_service=%d stop_wifi=%d sleep=%d",
                  close_service ? 1 : 0,
@@ -742,6 +864,7 @@ esp_err_t ApTransferServer::SettingsHandler(httpd_req_t* req) {
 }
 
 esp_err_t ApTransferServer::PhotosHandler(httpd_req_t* req) {
+    NotifyActivity();
     cJSON* root = cJSON_CreateObject();
     cJSON* photos = cJSON_CreateArray();
     if (!root || !photos) {
@@ -785,6 +908,7 @@ esp_err_t ApTransferServer::PhotosHandler(httpd_req_t* req) {
 }
 
 esp_err_t ApTransferServer::PhotoHandler(httpd_req_t* req) {
+    NotifyActivity();
     char query[64] = {};
     char id[16] = {};
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
@@ -840,6 +964,7 @@ esp_err_t ApTransferServer::PhotoHandler(httpd_req_t* req) {
 }
 
 esp_err_t ApTransferServer::PhotoMetaHandler(httpd_req_t* req) {
+    NotifyActivity();
     cJSON* root = ReadJsonBody(req);
     if (!root) {
         SendJson(req, "{\"success\":false,\"error\":\"bad_json\"}");
@@ -879,6 +1004,7 @@ esp_err_t ApTransferServer::PhotoMetaHandler(httpd_req_t* req) {
 }
 
 esp_err_t ApTransferServer::PhotoMoveHandler(httpd_req_t* req) {
+    NotifyActivity();
     cJSON* root = ReadJsonBody(req);
     if (!root) {
         SendJson(req, "{\"success\":false,\"error\":\"bad_json\"}");
@@ -900,6 +1026,7 @@ esp_err_t ApTransferServer::PhotoMoveHandler(httpd_req_t* req) {
 }
 
 esp_err_t ApTransferServer::PhotoShowHandler(httpd_req_t* req) {
+    NotifyActivity();
     cJSON* root = ReadJsonBody(req);
     if (!root) {
         SendJson(req, "{\"success\":false,\"error\":\"bad_json\"}");
@@ -940,6 +1067,252 @@ void ApTransferServer::SetPhotosChangedCallback(std::function<void()> callback) 
 
 void ApTransferServer::SetShowPhotoCallback(std::function<bool(const std::string&)> callback) {
     show_photo_callback_ = std::move(callback);
+}
+
+static void SendEmbeddedHtml(httpd_req_t* req, const char* start, const char* end) {
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    const size_t html_len = static_cast<size_t>(end - start);
+    httpd_resp_send(req, start, html_len);
+    CloseCurrentSession(req);
+}
+
+static void FormatUptime(uint64_t seconds, char* out, size_t out_size) {
+    unsigned days = static_cast<unsigned>(seconds / 86400);
+    unsigned hours = static_cast<unsigned>((seconds % 86400) / 3600);
+    unsigned mins = static_cast<unsigned>((seconds % 3600) / 60);
+    unsigned secs = static_cast<unsigned>(seconds % 60);
+    snprintf(out, out_size, "%ud %uh %um %us", days, hours, mins, secs);
+}
+
+esp_err_t ApTransferServer::OverviewHandler(httpd_req_t* req) {
+    NotifyActivity();
+    const uint64_t uptime_s = static_cast<uint64_t>(esp_timer_get_time() / 1000000);
+    char uptime[32];
+    FormatUptime(uptime_s, uptime, sizeof(uptime));
+
+    time_t now = time(nullptr);
+    struct tm local_tm = {};
+    localtime_r(&now, &local_tm);
+    char local_time[32] = {};
+    strftime(local_time, sizeof(local_time), "%Y-%m-%d %H:%M:%S", &local_tm);
+
+    char boot_time[32] = {};
+    if (local_tm.tm_year + 1900 >= 2021 && now > static_cast<time_t>(uptime_s)) {
+        time_t boot = now - static_cast<time_t>(uptime_s);
+        struct tm boot_tm = {};
+        localtime_r(&boot, &boot_tm);
+        strftime(boot_time, sizeof(boot_time), "%Y-%m-%d %H:%M:%S", &boot_tm);
+    }
+
+    int bat_level = -1;
+    bool charging = false;
+    bool discharging = false;
+    bool bat_ok = Board::GetInstance().GetBatteryLevel(bat_level, charging, discharging);
+    uint16_t voltage_mv = 0;
+    uint8_t voltage_pct = 0;
+    bool power_present = false;
+    const bool volt_ok = Board::GetInstance().GetBatteryVoltage(voltage_mv, voltage_pct, power_present);
+    if (!bat_ok && volt_ok) {
+        bat_level = static_cast<int>(voltage_pct);
+        discharging = !power_present;
+        bat_ok = true;
+    }
+    const char* bat_status = "未知";
+    if (bat_ok) {
+        if (charging) {
+            bat_status = "充电中";
+        } else if (discharging) {
+            bat_status = "放电中";
+        } else {
+            bat_status = "待机";
+        }
+    }
+
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "uptime_s", static_cast<double>(uptime_s));
+    cJSON_AddStringToObject(root, "uptime", uptime);
+    cJSON_AddStringToObject(root, "boot_time", boot_time);
+    cJSON_AddStringToObject(root, "local_time", local_time);
+    cJSON_AddStringToObject(root, "model", BOARD_NAME);
+    cJSON_AddStringToObject(root, "version", "v" PROJECT_VER);
+    cJSON* battery = cJSON_CreateObject();
+    cJSON_AddBoolToObject(battery, "ok", bat_ok);
+    cJSON_AddNumberToObject(battery, "level", bat_ok ? bat_level : -1);
+    cJSON_AddBoolToObject(battery, "charging", charging);
+    cJSON_AddBoolToObject(battery, "discharging", discharging);
+    cJSON_AddStringToObject(battery, "status", bat_status);
+    if (volt_ok) {
+        cJSON_AddNumberToObject(battery, "voltage_mv", voltage_mv);
+        cJSON_AddBoolToObject(battery, "power_present", power_present);
+    }
+    cJSON_AddItemToObject(root, "battery", battery);
+    char* json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) {
+        SendJson(req, "{\"success\":false}");
+        return ESP_FAIL;
+    }
+    SendJson(req, json);
+    cJSON_free(json);
+    return ESP_OK;
+}
+
+esp_err_t ApTransferServer::InterfaceHandler(httpd_req_t* req) {
+    NotifyActivity();
+    if (req->method == HTTP_POST) {
+        cJSON* body = ReadJsonBody(req);
+        if (!body) {
+            SendJson(req, "{\"success\":false,\"error\":\"bad_json\"}");
+            return ESP_FAIL;
+        }
+        NetifConfig cfg;
+        bool ok = NetifConfig::FromJson(body, &cfg);
+        cJSON_Delete(body);
+        if (!ok || !cfg.Save()) {
+            SendJson(req, "{\"success\":false,\"error\":\"invalid\"}");
+            return ESP_FAIL;
+        }
+        NetifConfig::ApplyOnConnected(esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"));
+        cJSON* resp = NetifConfig::ToJson();
+        char* json = cJSON_PrintUnformatted(resp);
+        cJSON_Delete(resp);
+        if (!json) {
+            SendJson(req, "{\"success\":true}");
+            return ESP_OK;
+        }
+        SendJson(req, json);
+        cJSON_free(json);
+        return ESP_OK;
+    }
+    cJSON* resp = NetifConfig::ToJson();
+    char* json = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    if (!json) {
+        SendJson(req, "{\"success\":false}");
+        return ESP_FAIL;
+    }
+    SendJson(req, json);
+    cJSON_free(json);
+    return ESP_OK;
+}
+
+esp_err_t ApTransferServer::ScanHandler(httpd_req_t* req) {
+    NotifyActivity();
+    bool support_5g = false;
+#ifdef CONFIG_SOC_WIFI_SUPPORT_5G
+    support_5g = true;
+#endif
+    wifi_scan_config_t scan_config = {};
+    scan_config.show_hidden = false;
+    scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+    esp_wifi_scan_start(&scan_config, true);
+
+    uint16_t ap_num = 0;
+    esp_wifi_scan_get_ap_num(&ap_num);
+    if (ap_num > 32) ap_num = 32;
+    std::vector<wifi_ap_record_t> records(ap_num);
+    if (ap_num > 0) {
+        esp_wifi_scan_get_ap_records(&ap_num, records.data());
+        records.resize(ap_num);
+    }
+
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "support_5g", support_5g);
+    cJSON* aps = cJSON_CreateArray();
+    for (const auto& ap : records) {
+        cJSON* item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "ssid", reinterpret_cast<const char*>(ap.ssid));
+        cJSON_AddNumberToObject(item, "rssi", ap.rssi);
+        cJSON_AddNumberToObject(item, "authmode", ap.authmode);
+        cJSON_AddItemToArray(aps, item);
+    }
+    cJSON_AddItemToObject(root, "aps", aps);
+    char* json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) {
+        SendJson(req, "{\"support_5g\":false,\"aps\":[]}");
+        return ESP_OK;
+    }
+    SendJson(req, json);
+    cJSON_free(json);
+    return ESP_OK;
+}
+
+esp_err_t ApTransferServer::SavedListHandler(httpd_req_t* req) {
+    NotifyActivity();
+    auto list = SsidManager::GetInstance().GetSsidList();
+    cJSON* arr = cJSON_CreateArray();
+    for (const auto& item : list) {
+        cJSON_AddItemToArray(arr, cJSON_CreateString(item.ssid.c_str()));
+    }
+    char* json = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    if (!json) {
+        SendJson(req, "[]");
+        return ESP_OK;
+    }
+    SendJson(req, json);
+    cJSON_free(json);
+    return ESP_OK;
+}
+
+esp_err_t ApTransferServer::SavedDeleteHandler(httpd_req_t* req) {
+    NotifyActivity();
+    int index = -1;
+    std::string uri = req->uri;
+    auto pos = uri.find("?index=");
+    if (pos != std::string::npos) sscanf(uri.c_str() + pos + 7, "%d", &index);
+    if (index >= 0) SsidManager::GetInstance().RemoveSsid(index);
+    SendJson(req, "{}");
+    return ESP_OK;
+}
+
+esp_err_t ApTransferServer::SavedSetDefaultHandler(httpd_req_t* req) {
+    NotifyActivity();
+    int index = -1;
+    std::string uri = req->uri;
+    auto pos = uri.find("?index=");
+    if (pos != std::string::npos) sscanf(uri.c_str() + pos + 7, "%d", &index);
+    if (index >= 0) SsidManager::GetInstance().SetDefaultSsid(index);
+    SendJson(req, "{}");
+    return ESP_OK;
+}
+
+esp_err_t ApTransferServer::SubmitWifiHandler(httpd_req_t* req) {
+    NotifyActivity();
+    cJSON* json = ReadJsonBody(req);
+    if (!json) {
+        SendJson(req, "{\"success\":false,\"error\":\"bad_json\"}");
+        return ESP_FAIL;
+    }
+    cJSON* ssid_item = cJSON_GetObjectItemCaseSensitive(json, "ssid");
+    cJSON* password_item = cJSON_GetObjectItemCaseSensitive(json, "password");
+    std::string ssid;
+    std::string password;
+    if (cJSON_IsString(ssid_item) && ssid_item->valuestring) ssid = ssid_item->valuestring;
+    if (cJSON_IsString(password_item) && password_item->valuestring) password = password_item->valuestring;
+    cJSON_Delete(json);
+    if (!wifi_credentials::Valid(ssid, password)) {
+        SendJson(req, "{\"success\":false,\"error\":\"Invalid SSID\"}");
+        return ESP_OK;
+    }
+    SsidManager::GetInstance().AddSsid(ssid, password);
+    SendJson(req, "{\"success\":true}");
+    return ESP_OK;
+}
+
+esp_err_t ApTransferServer::DeveloperBleHandler(httpd_req_t* req) {
+    NotifyActivity();
+    SendEmbeddedHtml(req, ble_web_panel_html_start, ble_web_panel_html_end);
+    return ESP_OK;
+}
+
+esp_err_t ApTransferServer::DeveloperLayoutHandler(httpd_req_t* req) {
+    NotifyActivity();
+    SendEmbeddedHtml(req, layout_adjuster_html_start, layout_adjuster_html_end);
+    return ESP_OK;
 }
 
 }  // namespace rawdraw

@@ -1,208 +1,133 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN" data-chrome="captive">
 <head>
-  <meta charset="UTF-8" />
-  <title>小智声波配网</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <style>
-    body {
-      font-family: "Segoe UI", "PingFang SC", sans-serif;
-      background: #f0f2f5;
-      margin: 0;
-      padding: 2rem 1rem;
-      display: flex;
-      justify-content: center;
-    }
-    .card {
-      background: #fff;
-      padding: 2rem 1.5rem;
-      border-radius: 16px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-      max-width: 400px;
-      width: 100%;
-    }
-    h2 {
-      text-align: center;
-      margin-bottom: 2rem;
-    }
-    label {
-      font-weight: bold;
-      display: block;
-      margin: 1rem 0 0.3rem;
-    }
-    input[type="text"],
-    input[type="password"] {
-      width: 100%;
-      padding: 0.75rem;
-      font-size: 1rem;
-      border-radius: 8px;
-      border: 1px solid #ccc;
-      box-sizing: border-box;
-    }
-    input[type="checkbox"] {
-      margin-right: 0.5rem;
-    }
-    .checkbox-container {
-      margin-top: 1rem;
-      font-size: 0.95rem;
-    }
-    button {
-      width: 100%;
-      margin-top: 1rem;
-      padding: 0.8rem;
-      font-size: 1rem;
-      border: none;
-      border-radius: 8px;
-      background-color: #4a90e2;
-      color: #fff;
-      cursor: pointer;
-      transition: background-color 0.2s;
-    }
-    button:hover {
-      background-color: #357ab8;
-    }
-    button:active {
-      background-color: #2f6ea2;
-    }
-    audio {
-      margin-top: 1.5rem;
-      width: 100%;
-      outline: none;
-    }
-  </style>
+<script>(function(){try{var t=localStorage.getItem('inkscreen-web-theme');document.documentElement.setAttribute('data-theme',t==='ink'?'ink':'luci');}catch(e){document.documentElement.setAttribute('data-theme','luci');}})();</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>声波配网</title>
+<link rel="stylesheet" href="../webui/luci-lite.css">
+
 </head>
 <body>
-  <div class="card">
-    <h2>📶 小智声波配网</h2>
-    <label for="ssid">WiFi 名称</label>
-    <input id="ssid" type="text" value="" placeholder="请输入 WiFi 名称" />
+<header>
+  <a class="brand" href="/">ZECTRIX <span class="brand-sub" id="endpoint"></span></a>
+  <ul class="nav" id="topmenu">
+    <li class="dropdown" data-chrome="lan" data-nav="status">
+      <a class="menu" href="/#status">状态</a>
+      <ul class="dropdown-menu">
+        <li><a href="/#status" data-route="status">概览</a></li>
+      </ul>
+    </li>
+    <li class="dropdown" data-chrome="lan" data-nav="photos">
+      <a class="menu" href="/#photos">相册</a>
+      <ul class="dropdown-menu">
+        <li><a href="/#photos" data-route="photos">图库</a></li>
+      </ul>
+    </li>
+    <li class="dropdown" data-chrome="lan" data-nav="system">
+      <a class="menu" href="/#system">系统</a>
+      <ul class="dropdown-menu">
+        <li><a href="/#system" data-route="system">设置</a></li>
+      </ul>
+    </li>
+    <li class="dropdown" data-chrome="lan" data-nav="network">
+      <a class="menu" href="/#wireless">网络</a>
+      <ul class="dropdown-menu">
+        <li><a href="/#wireless" data-route="wireless">无线</a></li>
+        <li><a href="/#interfaces" data-route="interfaces">接口</a></li>
+      </ul>
+    </li>
+    <li class="dropdown" data-chrome="captive" data-nav="network">
+      <a class="menu" href="/" data-lang="network_mode">网络</a>
+      <ul class="dropdown-menu">
+        <li><a href="/#wifi" data-route="wifi" data-lang="menu_wireless">无线</a></li>
+        <li><a href="/#sonic" data-route="sonic" data-lang="menu_sonic">声波配网</a></li>
+        <li><a href="/#advanced" data-route="advanced" data-lang="advanced_tab">高级</a></li>
+      </ul>
+    </li>
+    <li class="dropdown" data-nav="theme">
+      <a class="menu" href="#" data-lang="menu_theme">主题</a>
+      <ul class="dropdown-menu">
+        <li><a href="#" data-theme-set="luci" data-lang="theme_luci">LuCI</a></li>
+        <li><a href="#" data-theme-set="ink" data-lang="theme_ink">墨水屏</a></li>
+      </ul>
+    </li>
+    <li class="dropdown" data-chrome="lan" data-nav="developer">
+      <a class="menu" href="/developer/ble">开发者选项</a>
+      <ul class="dropdown-menu">
+        <li><a href="/developer/ble" data-route="ble">BLE 面板</a></li>
+        <li><a href="/developer/layout" data-route="layout">布局调整器</a></li>
+      </ul>
+    </li>
+  </ul>
+  <div id="indicators" class="pull-right">
+    <button type="button" class="cbi-button" id="helpBtn" data-chrome="lan">说明</button>
+    <span class="pill" data-chrome="lan">400x300</span>
+    <select id="language" class="lang-select" data-chrome="captive">
+      <option value="ar-SA">العربية</option>
+      <option value="bg-BG">Български</option>
+      <option value="ca-ES">Català</option>
+      <option value="cs-CZ">Čeština</option>
+      <option value="da-DK">Dansk</option>
+      <option value="de-DE">Deutsch</option>
+      <option value="el-GR">Ελληνικά</option>
+      <option value="en-US">English</option>
+      <option value="es-ES">Español</option>
+      <option value="fa-IR">فارسی</option>
+      <option value="fi-FI">Suomi</option>
+      <option value="fil-PH">Filipino</option>
+      <option value="fr-FR">Français</option>
+      <option value="he-IL">עברית</option>
+      <option value="hi-IN">हिन्दी</option>
+      <option value="hr-HR">Hrvatski</option>
+      <option value="hu-HU">Magyar</option>
+      <option value="id-ID">Bahasa Indonesia</option>
+      <option value="it-IT">Italiano</option>
+      <option value="ja-JP">日本語</option>
+      <option value="ko-KR">한국어</option>
+      <option value="ms-MY">Bahasa Melayu</option>
+      <option value="nb-NO">Norsk</option>
+      <option value="nl-NL">Nederlands</option>
+      <option value="pl-PL">Polski</option>
+      <option value="pt-PT">Português</option>
+      <option value="ro-RO">Română</option>
+      <option value="ru-RU">Русский</option>
+      <option value="sk-SK">Slovenčina</option>
+      <option value="sl-SI">Slovenščina</option>
+      <option value="sr-RS">Српски</option>
+      <option value="sv-SE">Svenska</option>
+      <option value="th-TH">ไทย</option>
+      <option value="tr-TR">Türkçe</option>
+      <option value="uk-UA">Українська</option>
+      <option value="vi-VN">Tiếng Việt</option>
+      <option value="zh-CN" selected>简体中文</option>
+      <option value="zh-TW">繁體中文</option>
+    </select>
+  </div>
+</header>
 
-    <label for="pwd">WiFi 密码</label>
-    <input id="pwd" type="password" value="" placeholder="请输入 WiFi 密码" />
 
-    <div class="checkbox-container">
-      <label><input type="checkbox" id="loopCheck" checked /> 自动循环播放声波</label>
+<div id="maincontent" class="container">
+  <div class="cbi-map">
+    <h2>声波配网</h2>
+    <div class="cbi-map-descr">输入 Wi-Fi 名称和密码，生成音频后对着设备播放。</div>
+    <div class="cbi-section">
+      <div class="cbi-value"><label class="cbi-value-title" for="ssid">WiFi 名称</label><div class="cbi-value-field"><input id="ssid" type="text" placeholder="请输入 WiFi 名称"></div></div>
+      <div class="cbi-value"><label class="cbi-value-title" for="pwd">WiFi 密码</label><div class="cbi-value-field"><input id="pwd" type="password" placeholder="请输入 WiFi 密码"></div></div>
+      <div class="cbi-value"><label class="cbi-value-title">循环播放</label><div class="cbi-value-field"><label><input type="checkbox" id="loopCheck" checked> 自动循环播放声波</label></div></div>
     </div>
-
-    <button onclick="generate()">🎵 生成并播放声波</button>
-    <button onclick="stopPlay()">⏹️ 停止播放</button>
+    <div class="cbi-page-actions">
+      <button type="button" class="cbi-button cbi-button-apply" onclick="generate()">生成并播放声波</button>
+      <button type="button" class="cbi-button" onclick="stopPlay()">停止播放</button>
+    </div>
     <audio id="player" controls></audio>
   </div>
-
-  <script>
-    const MARK = 1800;
-    const SPACE = 1500;
-    const SAMPLE_RATE = 44100;
-    const BIT_RATE = 100;
-    const START_BYTES = [0x01, 0x02];
-    const END_BYTES = [0x03, 0x04];
-    let loopTimer = null;
-
-    function checksum(data) {
-      return data.reduce((sum, b) => (sum + b) & 0xff, 0);
-    }
-
-    function toBits(byte) {
-      const bits = [];
-      for (let i = 7; i >= 0; i--) bits.push((byte >> i) & 1);
-      return bits;
-    }
-
-    function afskModulate(bits) {
-      const samplesPerBit = SAMPLE_RATE / BIT_RATE;
-      const totalSamples = Math.floor(bits.length * samplesPerBit);
-      const buffer = new Float32Array(totalSamples);
-      for (let i = 0; i < bits.length; i++) {
-        const freq = bits[i] ? MARK : SPACE;
-        for (let j = 0; j < samplesPerBit; j++) {
-          const t = (i * samplesPerBit + j) / SAMPLE_RATE;
-          buffer[i * samplesPerBit + j] = Math.sin(2 * Math.PI * freq * t);
-        }
-      }
-      return buffer;
-    }
-
-    function floatTo16BitPCM(floatSamples) {
-      const buffer = new Uint8Array(floatSamples.length * 2);
-      for (let i = 0; i < floatSamples.length; i++) {
-        const s = Math.max(-1, Math.min(1, floatSamples[i]));
-        const val = s < 0 ? s * 0x8000 : s * 0x7fff;
-        buffer[i * 2] = val & 0xff;
-        buffer[i * 2 + 1] = (val >> 8) & 0xff;
-      }
-      return buffer;
-    }
-
-    function buildWav(pcm) {
-      const wavHeader = new Uint8Array(44);
-      const dataLen = pcm.length;
-      const fileLen = 36 + dataLen;
-
-      const writeStr = (offset, str) => {
-        for (let i = 0; i < str.length; i++) wavHeader[offset + i] = str.charCodeAt(i);
-      };
-      const write32 = (offset, value) => {
-        wavHeader[offset] = value & 0xff;
-        wavHeader[offset + 1] = (value >> 8) & 0xff;
-        wavHeader[offset + 2] = (value >> 16) & 0xff;
-        wavHeader[offset + 3] = (value >> 24) & 0xff;
-      };
-      const write16 = (offset, value) => {
-        wavHeader[offset] = value & 0xff;
-        wavHeader[offset + 1] = (value >> 8) & 0xff;
-      };
-
-      writeStr(0, 'RIFF');
-      write32(4, fileLen);
-      writeStr(8, 'WAVE');
-      writeStr(12, 'fmt ');
-      write32(16, 16);
-      write16(20, 1);
-      write16(22, 1);
-      write32(24, SAMPLE_RATE);
-      write32(28, SAMPLE_RATE * 2);
-      write16(32, 2);
-      write16(34, 16);
-      writeStr(36, 'data');
-      write32(40, dataLen);
-
-      return new Blob([wavHeader, pcm], { type: 'audio/wav' });
-    }
-
-    function generate() {
-      stopPlay();
-      const ssid = document.getElementById('ssid').value.trim();
-      const pwd = document.getElementById('pwd').value.trim();
-      const dataStr = ssid + '\n' + pwd;
-      const textBytes = Array.from(new TextEncoder().encode(dataStr));
-      const fullBytes = [...START_BYTES, ...textBytes, checksum(textBytes), ...END_BYTES];
-
-      let bits = [];
-      fullBytes.forEach((b) => (bits = bits.concat(toBits(b))));
-
-      const floatBuf = afskModulate(bits);
-      const pcmBuf = floatTo16BitPCM(floatBuf);
-      const wavBlob = buildWav(pcmBuf);
-
-      const audio = document.getElementById('player');
-      audio.src = URL.createObjectURL(wavBlob);
-      audio.load();
-      audio.play();
-
-      // 修改了这里：使用 'ended' 事件来实现循环播放
-      if (document.getElementById('loopCheck').checked) {
-        audio.onended = function() {
-          audio.currentTime = 0;  // 从头开始
-          audio.play();           // 重新播放
-        };
-      }
-    }
-
-    function stopPlay() {
-      const audio = document.getElementById('player');
-      audio.pause();
-      audio.onended = null;  // 清除事件监听
-    }
-  </script>
+</div>
+<footer>
+  <span>Powered by Zack</span>
+  </footer>
+<script>if (!location.hash) { try { history.replaceState(null, '', '#sonic'); } catch (e) { location.hash = '#sonic'; } }</script>
+<script src="../webui/sonic.js"></script>
+<script src="../webui/theme.js"></script>
 </body>
 </html>

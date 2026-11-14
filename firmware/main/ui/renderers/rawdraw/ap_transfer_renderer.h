@@ -66,7 +66,7 @@ private:
     // State
     TransferState state_ = kWaitingForConnection;
     std::string status_message_;
-    std::string title_text_ = "WiFi 传图";
+    std::string title_text_ = "相册管理";
     std::string ssid_text_ = "InkScreen-AP";
     std::string password_text_ = "12345678";
     std::string url_text_ = "http://192.168.4.1";

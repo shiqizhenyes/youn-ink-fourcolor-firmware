@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html data-chrome="captive">
+<head>
+<script>(function(){try{var t=localStorage.getItem('inkscreen-web-theme');document.documentElement.setAttribute('data-theme',t==='ink'?'ink':'luci');}catch(e){document.documentElement.setAttribute('data-theme','luci');}})();</script>
+    <title>WiFi Configuration</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+    <style>
+__LUCI_LITE_CSS__
+    </style>
+</head>
+<body>
+__LUCI_HEADER__
+<div id="maincontent" class="container">
+    <div class="done-wrap">
+        <div class="alert-message success">
+            <p>配置成功！</p>
+            <p>Configuration successful!</p>
+        </div>
+    </div>
+</div>
+<footer>
+  <span>Powered by Zack</span>
+</footer>
+<script>
+__LUCI_THEME_JS__
+        (function(){
+            var net = document.querySelector('#topmenu [data-chrome="captive"][data-nav="network"] > a.menu');
+            if (net) net.addEventListener('click', function(){ location.href = '/'; });
+            var lang = document.getElementById('language');
+            if (lang) {
+                try {
+                    var saved = localStorage.getItem('preferred_language');
+                    if (saved) lang.value = saved;
+                } catch (e) {}
+            }
+        })();
+        window.addEventListener('load', function() {
+            setTimeout(function() {
+                fetch('/exit', {
+                    method: 'POST'
+                })
+                .then(function(response) {
+                    if (response.ok) {
+                        console.log('Exit config mode request sent');
+                    } else {
+                        console.error('Failed to send exit request');
+                    }
+                })
+                .catch(function(error) {
+                    console.error('Error:', error);
+                });
+            }, 1000);
+        });
+</script>
+</body>
+</html>

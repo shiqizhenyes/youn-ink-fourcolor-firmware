@@ -118,9 +118,35 @@ set(INCLUDE_DIRS
     "common"
 )
 
+include("${CMAKE_CURRENT_LIST_DIR}/../webui/webui.cmake")
+set(WEBUI_DIR "${CMAKE_CURRENT_LIST_DIR}/../webui")
+set(WEBUI_GEN "${CMAKE_CURRENT_BINARY_DIR}/webui")
+ink_webui_inject(
+    "${WEBUI_DIR}/photos.html.in"
+    "${WEBUI_DIR}/luci-lite.css"
+    "${WEBUI_DIR}/theme.js"
+    "${WEBUI_GEN}/photos.html"
+)
+ink_webui_inject_tool(
+    "${CMAKE_CURRENT_LIST_DIR}/../tools/ble_web_panel.html"
+    "${WEBUI_DIR}/luci-lite.css"
+    "${WEBUI_DIR}/theme.js"
+    "${WEBUI_GEN}/ble_web_panel.html"
+)
+ink_webui_inject_tool(
+    "${CMAKE_CURRENT_LIST_DIR}/../tools/layout_adjuster.html"
+    "${WEBUI_DIR}/luci-lite.css"
+    "${WEBUI_DIR}/theme.js"
+    "${WEBUI_GEN}/layout_adjuster.html"
+)
+
 idf_component_register(
     SRCS ${SOURCES}
     INCLUDE_DIRS ${INCLUDE_DIRS}
+    EMBED_TXTFILES
+        "${WEBUI_GEN}/photos.html"
+        "${WEBUI_GEN}/ble_web_panel.html"
+        "${WEBUI_GEN}/layout_adjuster.html"
     REQUIRES
         spiffs
         mbedtls

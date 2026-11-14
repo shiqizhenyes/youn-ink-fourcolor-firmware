@@ -265,7 +265,7 @@ void ApTransferRenderer::SetState(TransferState state, const std::string& messag
 }
 
 void ApTransferRenderer::UseDefaultTransferInstructions() {
-    SetInstructionContent("WiFi 传图",
+    SetInstructionContent("相册管理",
                           "InkScreen-AP",
                           "12345678",
                           "http://192.168.4.1",
