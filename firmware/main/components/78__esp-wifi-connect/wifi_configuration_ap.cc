@@ -19,6 +19,7 @@
 #include "ssid_manager.h"
 #include "wifi_credentials.h"
 #include "wifi_request_body.h"
+#include "netif_config.h"
 #include "sdkconfig.h"
 
 #define TAG "WifiConfigurationAp"
@@ -152,6 +153,13 @@ void WifiConfigurationAp::StartAccessPoint()
     
     // Create the default WiFi AP interface
     ap_netif_ = esp_netif_create_default_wifi_ap();
+    // STA netif is required in APSTA: the radio can associate without it, but DHCP
+    // and IP_EVENT_STA_GOT_IP never run. WifiStation creates its own copy after Stop().
+    if (esp_netif_get_handle_from_ifkey("WIFI_STA_DEF") == nullptr) {
+        sta_netif_ = esp_netif_create_default_wifi_sta();
+    } else {
+        sta_netif_ = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    }
 
     // Set the router IP address to 192.168.4.1
     esp_netif_ip_info_t ip_info;
@@ -781,6 +789,7 @@ void WifiConfigurationAp::WifiEventHandler(void* arg, esp_event_base_t event_bas
         ESP_LOGI(TAG, "Station " MACSTR " left, AID=%d", MAC2STR(event->mac), event->aid);
     } else if (event_id == WIFI_EVENT_STA_CONNECTED) {
         ESP_LOGI(TAG, "Associated with WiFi, waiting for IP address");
+        NetifConfig::ApplyIPv6(self->sta_netif_);
     } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
         auto* event = static_cast<wifi_event_sta_disconnected_t*>(event_data);
         ESP_LOGW(TAG, "WiFi disconnected during provisioning: reason=%u", event->reason);
@@ -915,6 +924,10 @@ void WifiConfigurationAp::Stop() {
     if (ap_netif_) {
         esp_netif_destroy_default_wifi(ap_netif_);
         ap_netif_ = nullptr;
+    }
+    if (sta_netif_) {
+        esp_netif_destroy_default_wifi(sta_netif_);
+        sta_netif_ = nullptr;
     }
 
     ESP_LOGI(TAG, "Wifi configuration AP stopped");
