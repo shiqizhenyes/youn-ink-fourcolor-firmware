@@ -27,6 +27,7 @@
 #include <fcntl.h>
 #include "ssid_manager.h"
 #include "wifi_manager.h"
+#include "netif_config.h"
 
 #define TAG "WifiStation"
 #define FAST_RC_TAG "FAST_RC"
@@ -653,8 +654,8 @@ void WifiStation::Stop() {
         esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, instance_any_id_);
         instance_any_id_ = nullptr;
     }
-    if (instance_got_ip_ != nullptr) {
-        esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, instance_got_ip_);
+        if (instance_got_ip_ != nullptr) {
+        esp_event_handler_instance_unregister(IP_EVENT, ESP_EVENT_ANY_ID, instance_got_ip_);
         instance_got_ip_ = nullptr;
     }
 
@@ -709,8 +710,8 @@ void WifiStation::SuspendForExternalAp() {
         esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, instance_any_id_);
         instance_any_id_ = nullptr;
     }
-    if (instance_got_ip_ != nullptr) {
-        esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, instance_got_ip_);
+        if (instance_got_ip_ != nullptr) {
+        esp_event_handler_instance_unregister(IP_EVENT, ESP_EVENT_ANY_ID, instance_got_ip_);
         instance_got_ip_ = nullptr;
     }
 }
@@ -730,7 +731,7 @@ void WifiStation::ResumeAfterExternalAp() {
     }
     if (instance_got_ip_ == nullptr) {
         esp_err_t err = esp_event_handler_instance_register(IP_EVENT,
-                                                            IP_EVENT_STA_GOT_IP,
+                                                            ESP_EVENT_ANY_ID,
                                                             &WifiStation::IpEventHandler,
                                                             this,
                                                             &instance_got_ip_);
@@ -776,6 +777,7 @@ void WifiStation::Start() {
     
     // Create the default WiFi station interface
     station_netif_ = esp_netif_create_default_wifi_sta();
+    NetifConfig::ApplyHostname(station_netif_);
     int64_t t_ms = esp_timer_get_time() / 1000;
     ESP_LOGI(FAST_RC_TAG, "stage=wifi event=station_start path=slow t_ms=%lld fast_enable=%d",
              static_cast<long long>(t_ms), kFastRcEnable ? 1 : 0);
@@ -786,7 +788,7 @@ void WifiStation::Start() {
                                                         this,
                                                         &instance_any_id_));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
+                                                        ESP_EVENT_ANY_ID,
                                                         &WifiStation::IpEventHandler,
                                                         this,
                                                         &instance_got_ip_));
@@ -1127,6 +1129,11 @@ void WifiStation::WifiEventHandler(void* arg, esp_event_base_t event_base, int32
         int64_t t_ms = esp_timer_get_time() / 1000;
         ESP_LOGI(FAST_RC_TAG, "stage=wifi event=sta_connected path=slow t_ms=%lld",
                  static_cast<long long>(t_ms));
+        NetifConfig::ApplyIPv6(this_->station_netif_);
+        if (NetifConfig::IsStatic()) {
+            NetifConfig::ApplyOnConnected(this_->station_netif_);
+            return;
+        }
         if (kFastRcEnable && !this_->ip_fast_attempt_ && this_->ip_fast_task_handle_ == nullptr) {
             esp_netif_ip_info_t ip_info{};
             esp_ip4_addr_t dns_info{};
@@ -1177,6 +1184,13 @@ void WifiStation::WifiEventHandler(void* arg, esp_event_base_t event_base, int32
 
 void WifiStation::IpEventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     auto* this_ = static_cast<WifiStation*>(arg);
+    if (event_id == IP_EVENT_GOT_IP6) {
+        auto* event = static_cast<ip_event_got_ip6_t*>(event_data);
+        auto type = esp_netif_ip6_get_addr_type(&event->ip6_info.ip);
+        ESP_LOGI(TAG, "Got IPv6: " IPV6STR " type=%d", IPV62STR(event->ip6_info.ip), static_cast<int>(type));
+        return;
+    }
+    if (event_id != IP_EVENT_STA_GOT_IP) return;
     if (this_->ip_fast_ready_) {
         int64_t t_ms = esp_timer_get_time() / 1000;
         ESP_LOGI(FAST_RC_TAG, "stage=ip event=got_ip_ignore path=fast t_ms=%lld reason=ip_fast_ready",
@@ -1215,7 +1229,9 @@ void WifiStation::IpEventHandler(void* arg, esp_event_base_t event_base, int32_t
                  static_cast<long long>(t_ms));
     }
     SaveIpFastCache(this_->station_netif_, event->ip_info);
-    
+    NetifConfig::ApplyDns(this_->station_netif_, false);
+    NetifConfig::ApplyIPv6(this_->station_netif_);
+
     xEventGroupSetBits(this_->event_group_, WIFI_EVENT_CONNECTED);
     this_->was_connected_ = true;  // Mark as connected for disconnect notification
     if (this_->on_connected_) {
@@ -1460,6 +1476,8 @@ bool WifiStation::RunIpFast() {
     scan_current_interval_microseconds_ = scan_min_interval_microseconds_;
     ip_fast_ready_ = true;
     ip_fast_attempt_ = false;
+    NetifConfig::ApplyDns(station_netif_, false);
+    NetifConfig::ApplyIPv6(station_netif_);
     ESP_LOGI(FAST_RC_TAG, "stage=ip event=fast_success path=fast t_ms=%lld ip=%s",
              static_cast<long long>(esp_timer_get_time() / 1000), ip_address_.c_str());
     return true;
