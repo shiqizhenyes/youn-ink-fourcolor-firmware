@@ -15,6 +15,10 @@ void BoardPowerBsp::PowerLedTask(void *arg) {
     gpio_conf.pull_up_en    = GPIO_PULLUP_ENABLE;
     ESP_ERROR_CHECK_WITHOUT_ABORT(gpio_config(&gpio_conf));
     for (;;) {
+        if (self->led_forced_off_.load(std::memory_order_relaxed)) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
         if (self->led_override_enabled_.load(std::memory_order_relaxed)) {
             const bool blink = self->led_override_blink_.load(std::memory_order_relaxed);
             if (blink) {
@@ -78,7 +82,8 @@ BoardPowerBsp::BoardPowerBsp(int epdPowerPin, int audioPowerPin, int audioAmpPin
     gpio_conf.mode          = GPIO_MODE_OUTPUT;
     gpio_conf.pin_bit_mask  = (0x1ULL << epdPowerPin_) | (0x1ULL << audioPowerPin_) | (0x1ULL << audioAmpPin_) | (0x1ULL << vbatPowerPin_);
     gpio_conf.pull_down_en  = GPIO_PULLDOWN_DISABLE;
-    gpio_conf.pull_up_en    = GPIO_PULLUP_ENABLE;
+    // These pins are held low for long stretches; an internal pull-up would leak ~70uA each.
+    gpio_conf.pull_up_en    = GPIO_PULLUP_DISABLE;
     ESP_ERROR_CHECK_WITHOUT_ABORT(gpio_config(&gpio_conf));
     xTaskCreatePinnedToCore(PowerLedTask, "PowerLedTask", 3 * 1024, this, 2, NULL, 0);
 }
@@ -142,4 +147,11 @@ void BoardPowerBsp::SetFactoryLedOverride(bool enabled, bool blink) {
 
 void BoardPowerBsp::FlashActivityLed() {
     led_activity_pulses_.store(1, std::memory_order_relaxed);
+}
+
+void BoardPowerBsp::LedOff() {
+    led_forced_off_.store(true, std::memory_order_relaxed);
+    gpio_hold_dis(GPIO_NUM_3);
+    gpio_set_level(GPIO_NUM_3, 1);
+    gpio_hold_en(GPIO_NUM_3);
 }

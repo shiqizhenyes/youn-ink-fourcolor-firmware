@@ -16,6 +16,7 @@ private:
     std::atomic<bool> led_override_blink_{false};
     std::atomic<bool> led_override_phase_{false};
     std::atomic<int> led_activity_pulses_{0};
+    std::atomic<bool> led_forced_off_{false};
 
     static void PowerLedTask(void *arg);
 
@@ -33,6 +34,8 @@ public:
     void VbatPowerOff();
     void SetFactoryLedOverride(bool enabled, bool blink);
     void FlashActivityLed();
+    /** @brief Turn the status LED off and stop the LED task from driving it (deep sleep) */
+    void LedOff();
 };
 
 #endif

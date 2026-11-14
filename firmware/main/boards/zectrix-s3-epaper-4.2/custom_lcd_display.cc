@@ -4,6 +4,8 @@
 
 #include <esp_log.h>
 #include <esp_heap_caps.h>
+#include <esp_rom_sys.h>
+#include <esp_system.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -240,22 +242,29 @@ CustomLcdDisplay::CustomLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_p
         sample_interval_ms = kFourColorSampleIntervalMs;
     }
 
-    ESP_LOGI(TAG, "EPD init");
-    EPD_Init();
-
     // buffer init
     EPD_Clear();
     memcpy(prev_buffer, buffer, lcd_spi_data.buffer_len);
-#if CONFIG_ZECTRIX_EPD_4COLOR_BOOT_TEST_PATTERN
-    if (IsFourColorPanel()) {
-        EPD_DisplayFourColorTestPattern();
+    if (esp_reset_reason() == ESP_RST_DEEPSLEEP) {
+        // The panel still shows the pre-sleep image; skip the white boot refresh and
+        // let the UI's first (full) refresh redraw it, or none at all on a quiet wake.
+        ESP_LOGI(TAG, "EPD boot refresh skipped after deep sleep");
+        EPD_PowerOff();
+        prev_buffer_synced = false;
     } else {
-        EPD_Display();
-    }
+        ESP_LOGI(TAG, "EPD init");
+        EPD_Init();
+#if CONFIG_ZECTRIX_EPD_4COLOR_BOOT_TEST_PATTERN
+        if (IsFourColorPanel()) {
+            EPD_DisplayFourColorTestPattern();
+        } else {
+            EPD_Display();
+        }
 #else
-    EPD_Display();
+        EPD_Display();
 #endif
-    prev_buffer_synced = true;
+        prev_buffer_synced = true;
+    }
     if (IsFourColorPanel()) {
         last_sample_tick = xTaskGetTickCount();
     }
@@ -375,6 +384,18 @@ bool CustomLcdDisplay::IsRefreshPending() {
         xSemaphoreGive(dirty_mutex);
     }
     return busy;
+}
+
+bool CustomLcdDisplay::WaitForRefreshIdle(uint32_t timeout_ms) {
+    const TickType_t start = xTaskGetTickCount();
+    const TickType_t timeout = pdMS_TO_TICKS(timeout_ms < 1 ? 1 : timeout_ms);
+    while (IsRefreshPending()) {
+        if ((xTaskGetTickCount() - start) >= timeout) {
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    return true;
 }
 
 void CustomLcdDisplay::RequestUrgentRefresh() {
@@ -679,7 +700,9 @@ void CustomLcdDisplay::spi_gpio_init() {
     gpio_conf.mode          = GPIO_MODE_OUTPUT;
     gpio_conf.pin_bit_mask  = (0x1ULL << rst) | (0x1ULL << dc) | (0x1ULL << cs);
     gpio_conf.pull_down_en  = GPIO_PULLDOWN_DISABLE;
-    gpio_conf.pull_up_en    = GPIO_PULLUP_ENABLE;
+    // No internal pull-ups: the panel rail is cut between refreshes and a pull-up
+    // on any panel pin would back-power it through its ESD diodes.
+    gpio_conf.pull_up_en    = GPIO_PULLUP_DISABLE;
     ESP_ERROR_CHECK_WITHOUT_ABORT(gpio_config(&gpio_conf));
 
     gpio_conf.mode         = GPIO_MODE_INPUT;
@@ -886,16 +909,51 @@ void CustomLcdDisplay::EPD_TurnOnDisplay() {
 
 
 void CustomLcdDisplay::EPD_PowerOn() {
+    const int signal_pins[] = {lcd_spi_data.rst, lcd_spi_data.dc, lcd_spi_data.cs,
+                               lcd_spi_data.mosi, lcd_spi_data.scl};
+    for (int pin : signal_pins) {
+        gpio_hold_dis((gpio_num_t)pin);
+    }
+    if (epd_pins_parked_) {
+        spi_port_init();
+        epd_pins_parked_ = false;
+    }
+
     gpio_hold_dis((gpio_num_t)lcd_spi_data.power);
     gpio_set_level((gpio_num_t)lcd_spi_data.power, 1);
     gpio_hold_en((gpio_num_t)lcd_spi_data.power);
+    esp_rom_delay_us(1000);
+
+    // BUSY has no external pull-up; keep it defined only while the panel is powered.
+    gpio_pullup_en((gpio_num_t)lcd_spi_data.busy);
+    set_cs_1();
+    set_dc_1();
+    set_rst_1();
 }
 
 void CustomLcdDisplay::EPD_PowerOff(){
+    // Drive every panel signal low before cutting 3V3_EPD so nothing back-powers
+    // the unpowered panel; held so the levels also survive deep sleep.
+    gpio_config_t park = {};
+    park.mode = GPIO_MODE_OUTPUT;
+    park.pull_up_en = GPIO_PULLUP_DISABLE;
+    park.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    park.intr_type = GPIO_INTR_DISABLE;
+    park.pin_bit_mask = (0x1ULL << lcd_spi_data.mosi) | (0x1ULL << lcd_spi_data.scl);
+    ESP_ERROR_CHECK_WITHOUT_ABORT(gpio_config(&park));
+    epd_pins_parked_ = true;
+
+    const int signal_pins[] = {lcd_spi_data.rst, lcd_spi_data.dc, lcd_spi_data.cs,
+                               lcd_spi_data.mosi, lcd_spi_data.scl};
+    for (int pin : signal_pins) {
+        gpio_set_level((gpio_num_t)pin, 0);
+        gpio_hold_en((gpio_num_t)pin);
+    }
+    gpio_pullup_dis((gpio_num_t)lcd_spi_data.busy);
+
     gpio_hold_dis((gpio_num_t)lcd_spi_data.power);
     gpio_set_level((gpio_num_t)lcd_spi_data.power, 0);
     gpio_hold_en((gpio_num_t)lcd_spi_data.power);
-    
 }
 
 // =======================================================

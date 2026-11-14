@@ -76,6 +76,8 @@ public:
 
     // Refresh state for sleep gating
     bool IsRefreshPending();
+    /** @return true if the panel became idle before timeout_ms */
+    bool WaitForRefreshIdle(uint32_t timeout_ms);
 
     // Notify when refresh transitions from busy to idle.
     void SetOnRefreshIdle(std::function<void()> cb);
@@ -88,6 +90,7 @@ private:
     const epd_panel_type_t panel_type_;
     spi_device_handle_t spi = nullptr;
     bool spi_bus_inited = false;
+    bool epd_pins_parked_ = false;    // MOSI/SCK detached from SPI while the panel is off
     uint8_t *buffer      = nullptr;   // 1bpp framebuffer
     uint8_t *prev_buffer = nullptr;   // optional
     uint8_t *tx_buf      = nullptr;   // snapshot buffer for async send (size = buffer_len)
