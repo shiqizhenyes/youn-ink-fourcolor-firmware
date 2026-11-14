@@ -456,7 +456,6 @@ document.getElementById('ifaceSave').onclick=async()=>{
   }catch(e){msg.className='alert-message error';msg.textContent='网络错误';msg.style.display='block';}
 };
 loadStatus();loadSettings();loadPhotos();syncIfaceForm();
-syncAlgoRow();
 __LUCI_THEME_JS__
 const bootMode=(location.hash||'#photos').slice(1);
 showMode(['status','photos','upload','system','wireless','interfaces'].includes(bootMode)?bootMode:'photos');
