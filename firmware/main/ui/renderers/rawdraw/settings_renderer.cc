@@ -697,6 +697,30 @@ void SettingsRenderer::RenderItem(uint8_t* fb, int width, int y,
         // showed square border pixels on the previous RectBorder-based knob.
         DrawCircle(fb, width, {knob_cx, row_center_y - 1}, knob / 2, theme.Style(ThemeToken::BackgroundPrimary).bg);
         DrawCircleBorder(fb, width, {knob_cx, row_center_y - 1}, knob / 2, 1, text_style.fg);
+    } else if (item.type == SettingsItemType::Slider) {
+        char value_buf[8];
+        snprintf(value_buf, sizeof(value_buf), "%d%%", item.slider_value);
+        // Reserve the width of "100%" so the bar does not shift as the value changes.
+        const int value_col_w = MeasureTextWidth("100%", value_font_);
+        const int value_w = MeasureTextWidth(value_buf, value_font_);
+        DrawText(fb, width, content_right - value_w,
+                 InkCenteredTextTopY(value_font_, value_buf, row_center_y, kValueOpticalNudgeY),
+                 value_buf, value_font_, text_style.fg);
+
+        const int track_w = 96;
+        const int track_h = 10;
+        const int track_x = content_right - value_col_w - Style::kSpacingSM - track_w;
+        const int track_y = row_center_y - track_h / 2;
+        label_right = track_x - Style::kSpacingLG;
+        DrawStyledRoundRect(fb, width, 300, {track_x, track_y, track_w, track_h},
+                            Style::kBorderRadiusPill, theme.Style(ThemeToken::BackgroundPrimary));
+        DrawRectBorder(fb, width, {track_x, track_y, track_w, track_h}, 1,
+                       theme.Component(ComponentRole::Progress).border);
+        const int fill_w = (track_w - 4) * item.slider_value / 100;
+        if (fill_w > 0) {
+            DrawRect(fb, width, {track_x + 2, track_y + 2, fill_w, track_h - 4},
+                     TokenInkOnPaper(ThemeToken::ProgressFill));
+        }
     } else if (!item.value.empty()) {
         const int value_right = content_right - right_margin;
         const int max_val_w = std::max(0, value_right - (content_left + 88));
@@ -996,6 +1020,7 @@ bool SettingsRenderer::HandleInput(const ButtonEvent& event) {
         }
 
         case ButtonEvent::kUpLongPress:
+            if (AdjustSelectedSlider(kSliderLongPressStep)) return true;
             // Scroll to top
             scroll_offset_ = 0;
             selected_index_ = GetFirstSelectableIndex();
@@ -1025,6 +1050,7 @@ bool SettingsRenderer::HandleInput(const ButtonEvent& event) {
             break;
 
         case ButtonEvent::kDownLongPress: {
+            if (AdjustSelectedSlider(-kSliderLongPressStep)) return true;
             // Scroll to bottom
             selected_index_ = GetLastSelectableIndex();
             first_visible_index_ = selected_index_;
@@ -1089,6 +1115,31 @@ void SettingsRenderer::UpdateChecked(int index, bool checked) {
         items_[index].checked = checked;
         needs_full_refresh_ = true;
     }
+}
+
+void SettingsRenderer::UpdateSlider(int index, int value) {
+    if (index >= 0 && index < static_cast<int>(items_.size())) {
+        items_[index].slider_value = std::clamp(value, 0, 100);
+        needs_full_refresh_ = true;
+    }
+}
+
+bool SettingsRenderer::AdjustSelectedSlider(int delta) {
+    if (showing_about_dialog_ || showing_volume_dialog_ || showing_storage_dialog_ ||
+        showing_server_dialog_ || showing_server_list_dialog_ || showing_theme_dialog_ ||
+        showing_ota_dialog_) {
+        return false;
+    }
+    if (selected_index_ < 0 || selected_index_ >= static_cast<int>(items_.size())) return false;
+    SettingsItemDef& item = items_[selected_index_];
+    if (item.type != SettingsItemType::Slider) return false;
+    const int next = std::clamp(item.slider_value + delta, 0, 100);
+    if (next != item.slider_value) {
+        item.slider_value = next;
+        needs_full_refresh_ = true;
+    }
+    if (item.on_slider) item.on_slider(next);
+    return true;
 }
 
 void SettingsRenderer::ShowOtaDialog(const std::vector<std::string>& versions,

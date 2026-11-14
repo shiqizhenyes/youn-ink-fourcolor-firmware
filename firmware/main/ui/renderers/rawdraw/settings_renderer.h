@@ -26,6 +26,7 @@ enum class SettingsItemType {
     Checkbox,  ///< Toggleable checkbox
     Action,    ///< Action button (highlighted style)
     Section,   ///< Section header (non-interactive label)
+    Slider,    ///< 0-100 value bar; long-press UP/DOWN adjusts it while selected
 };
 
 /**
@@ -38,6 +39,8 @@ struct SettingsItemDef {
     SettingsItemType type = SettingsItemType::Normal;
     bool checked = false;
     std::function<void()> on_click;
+    int slider_value = 0;                   ///< Slider only, 0..100
+    std::function<void(int)> on_slider;     ///< Slider only, called with the new value
 };
 
 /**
@@ -51,6 +54,8 @@ struct SettingsItemDef {
  */
 class SettingsRenderer : public PageRenderer {
 public:
+    static constexpr int kSliderLongPressStep = 10;
+
     SettingsRenderer();
     ~SettingsRenderer() override;
 
@@ -63,6 +68,12 @@ public:
     void SetItems(const std::vector<SettingsItemDef>& items);
     void UpdateItem(int index, const std::string& value);
     void UpdateChecked(int index, bool checked);
+    void UpdateSlider(int index, int value);
+    /**
+     * @brief Step the selected Slider row by delta (clamped to 0..100)
+     * @return false when no dialog is open and the selected row is not a Slider
+     */
+    bool AdjustSelectedSlider(int delta);
     int GetItemCount() const { return static_cast<int>(items_.size()); }
     int GetSelectedIndex() const { return selected_index_; }
 
