@@ -61,6 +61,12 @@ set(SOURCES
     "common/ble_gatt_service.cc"
     "common/ble_image_receiver.cc"
     "common/holiday_fetcher.cc"
+    "common/ink_weather_data.cc"
+    "common/qweather_client.cc"
+    "common/qweather_jwt.cc"
+    "common/gzip_util.cc"
+    "common/weather_speaker.cc"
+    "common/weather_prefs.cc"
     "common/power_diag.cc"
     "ui/widgets/status_bar.cc"
     "ui/renderers/rawdraw/ebook_renderer.cc"
@@ -74,6 +80,7 @@ set(SOURCES
     "ui/renderers/rawdraw/log_renderer.cc"
     "ui/renderers/rawdraw/yearprogress_renderer.cc"
     "ui/renderers/rawdraw/calendar_renderer.cc"
+    "ui/renderers/rawdraw/ink_weather_renderer.cc"
     "ui/renderers/rawdraw/photo_gallery.cc"
     "ui/renderers/rawdraw/photo_detail_renderer.cc"
     "ui/renderers/rawdraw/news_renderer.cc"
@@ -139,8 +146,14 @@ idf_component_register(
         esp_lcd
         esp_netif
         esp_event
+        esp_rom
         log
 )
+
+# Offline Chinese TTS voice for weather announcements (see common/weather_speaker.cc).
+idf_component_get_property(esp_sr_dir espressif__esp-sr COMPONENT_DIR)
+esptool_py_flash_to_partition(flash "voice_data"
+    "${esp_sr_dir}/esp-tts/esp_tts_chinese/esp_tts_voice_data_xiaole.dat")
 
 target_compile_definitions(
     ${COMPONENT_LIB}

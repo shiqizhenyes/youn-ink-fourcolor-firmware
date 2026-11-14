@@ -109,6 +109,11 @@ public:
     size_t GetSendQueueSize();
     void PlaySound(const std::string_view& sound);
     void PlaySound(const std::string_view& sound, int duration_ms);
+    /**
+     * @brief Queue raw PCM at the codec output rate; blocks while the playback queue is full
+     * @return false if output was muted (MuteOutput) or the service stopped
+     */
+    bool PlayPcm(std::vector<int16_t>&& pcm);
     void MuteOutput();
     void UnmuteOutput();
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);

@@ -8,6 +8,11 @@ idf_component_register(
         "src/weather_icons/weather_icons_16.c"
         "src/weather_icons/weather_icons_48.c"
         "src/fa_settings/fa_settings_16.c"
+        "src/inksight/inksight_cjk_12.c"
+        "src/inksight/inksight_cjk_14.c"
+        "src/inksight/inksight_cjk_16.c"
+        "src/inksight/inksight_temp_48.c"
+        "src/inksight/inksight_weather_icons.c"
     INCLUDE_DIRS
         "include"
     PRIV_REQUIRES

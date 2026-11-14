@@ -104,4 +104,5 @@ dependencies:
 
   # IDF 6.0 compatibility: these were built-in before
   espressif/cjson: ^1
+  espressif/libsodium: ^1.0.22
   espressif/mqtt: '*'

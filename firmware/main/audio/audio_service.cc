@@ -767,6 +767,33 @@ void AudioService::PlaySound(const std::string_view& ogg, int duration_ms) {
     }
 }
 
+bool AudioService::PlayPcm(std::vector<int16_t>&& pcm) {
+    if (mute_local_sound_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    if (!codec_->output_enabled()) {
+        esp_timer_stop(audio_power_timer_);
+        esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
+        codec_->EnableOutput(true);
+    }
+    auto task = std::make_unique<AudioTask>();
+    task->type = kAudioTaskTypeDecodeToPlaybackQueue;
+    task->pcm = std::move(pcm);
+    task->timestamp = 0;
+
+    std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    audio_queue_cv_.wait(lock, [this]() {
+        return audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE || service_stopped_ ||
+               mute_local_sound_.load(std::memory_order_acquire);
+    });
+    if (service_stopped_ || mute_local_sound_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    audio_playback_queue_.push_back(std::move(task));
+    audio_queue_cv_.notify_all();
+    return true;
+}
+
 void AudioService::MuteOutput() {
     if (codec_ == nullptr) {
         return;

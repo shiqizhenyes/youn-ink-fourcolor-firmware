@@ -41,4 +41,37 @@ config ZECTRIX_EPD_4COLOR_BOOT_TEST_PATTERN
         Show black/white/red/yellow vertical bars once during display
         initialization so a newly connected 4-color panel can be verified.
 
+menu "QWeather (JWT)"
+
+config QWEATHER_API_HOST
+    string "QWeather API host"
+    default ""
+    help
+        Per-account API host from the QWeather console, without scheme,
+        e.g. abcxyz.qweatherapi.com. Set these values in the local,
+        untracked sdkconfig; do not commit them.
+
+config QWEATHER_KEY_ID
+    string "Credential ID (JWT kid)"
+    default ""
+
+config QWEATHER_PROJECT_ID
+    string "Project ID (JWT sub)"
+    default ""
+
+config QWEATHER_DEVELOPER_ID
+    string "Developer ID (JWT iss)"
+    default ""
+
+config QWEATHER_PRIVATE_KEY
+    string "Ed25519 private key seed (Base64)"
+    default ""
+    help
+        Base64 of the 32-byte Ed25519 seed, i.e. the last 32 bytes of the
+        PKCS#8 DER private key:
+          openssl pkey -in ed25519-private.pem -outform DER | tail -c 32 | base64
+        Leave empty to disable the weather page fetch.
+
+endmenu
+
 endmenu
