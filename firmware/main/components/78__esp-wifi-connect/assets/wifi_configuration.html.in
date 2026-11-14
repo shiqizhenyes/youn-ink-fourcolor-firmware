@@ -1092,6 +1092,25 @@ __LUCI_HEADER__
 
         // ========== Form Submission ==========
         
+        async function waitProvisionResult() {
+            for (var i = 0; i < 80; i++) {
+                try {
+                    var r = await fetch('/provision_status', { cache: 'no-store' });
+                    var j = await r.json();
+                    if (j.state === 'success') return j;
+                    if (j.state === 'fail') {
+                        var fail = new Error(j.error || 'Connection failed');
+                        fail.fatal = true;
+                        throw fail;
+                    }
+                } catch (e) {
+                    if (e && e.fatal) throw e;
+                }
+                await new Promise(function(res) { setTimeout(res, 400); });
+            }
+            throw new Error('Connection timed out');
+        }
+
         /**
          * Submit Wi-Fi connection form
          */
@@ -1122,12 +1141,11 @@ __LUCI_HEADER__
                 if (!data.success) {
                     throw new Error(data.error || 'Connection failed');
                 }
-
-                // Connection successful, redirect to done page
-                button.disabled = false;
+                if (data.accepted) {
+                    await waitProvisionResult();
+                }
                 window.location.href = '/done.html';
             } catch (err) {
-                // Hide loading animation on error
                 loadingOverlay.classList.remove('show');
                 error.textContent = err.message; error.style.display = 'block';
                 button.disabled = false;

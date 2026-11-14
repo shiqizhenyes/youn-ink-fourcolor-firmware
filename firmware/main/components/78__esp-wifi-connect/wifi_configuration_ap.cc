@@ -89,6 +89,8 @@ void WifiConfigurationAp::SetPassword(const std::string &password)
 void WifiConfigurationAp::Start()
 {
     exit_scheduled_.store(false);
+    provision_state_.store(0);
+    provision_error_.clear();
     // Register event handlers
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
                                                         ESP_EVENT_ANY_ID,
@@ -252,7 +254,7 @@ void WifiConfigurationAp::StartWebServer()
 {
     // Start the web server
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 24;
+    config.max_uri_handlers = 25;
     config.uri_match_fn = httpd_uri_match_wildcard;
     // 5G Network takes longer to connect
     config.recv_wait_timeout = 15;
@@ -454,23 +456,22 @@ void WifiConfigurationAp::StartWebServer()
                 return ESP_OK;
             }
 
-            // 获取当前对象
+            // Return immediately so the browser gets JSON before APSTA CSA
+            // kills this TCP connection. Connect runs on a worker; the page
+            // polls /provision_status then navigates to /done.html.
             auto *this_ = static_cast<WifiConfigurationAp *>(req->user_ctx);
-            if (!this_->ConnectToWifi(ssid_str, password_str)) {
-                cJSON_Delete(json);
-                httpd_resp_send(req, "{\"success\":false,\"error\":\"Failed to connect to the Access Point\"}", HTTPD_RESP_USE_STRLEN);
-                return ESP_OK;
+            int expected = 0;
+            if (this_->provision_state_.compare_exchange_strong(expected, 1)) {
+                this_->BeginAsyncProvision(ssid_str, password_str);
+            } else if (expected == 3) {
+                this_->provision_state_.store(1);
+                this_->BeginAsyncProvision(ssid_str, password_str);
             }
-
-            this_->Save(ssid_str, password_str);
             cJSON_Delete(json);
-            // 设置成功响应
             httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Cache-Control", "no-store");
             httpd_resp_set_hdr(req, "Connection", "close");
-            httpd_resp_send(req, "{\"success\":true}", HTTPD_RESP_USE_STRLEN);
-            // Credentials are saved. Do not wait for /done.html to POST /exit —
-            // AP channel switch + STA disconnect often drops that follow-up.
-            this_->ScheduleExitConfigMode();
+            httpd_resp_send(req, "{\"success\":true,\"accepted\":true}", HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
         },
         .user_ctx = this
@@ -482,11 +483,15 @@ void WifiConfigurationAp::StartWebServer()
         .uri = "/done.html",
         .method = HTTP_GET,
         .handler = [](httpd_req_t *req) -> esp_err_t {
+            auto* this_ = static_cast<WifiConfigurationAp*>(req->user_ctx);
             httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_send(req, done_html_start, strlen(done_html_start));
+            if (this_) {
+                this_->ScheduleExitConfigMode();
+            }
             return ESP_OK;
         },
-        .user_ctx = NULL
+        .user_ctx = this
     };
     ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &done_html));
 
@@ -512,6 +517,42 @@ void WifiConfigurationAp::StartWebServer()
         .user_ctx = this
     };
     ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &exit_config));
+
+    httpd_uri_t provision_status = {
+        .uri = "/provision_status",
+        .method = HTTP_GET,
+        .handler = [](httpd_req_t *req) -> esp_err_t {
+            auto* this_ = static_cast<WifiConfigurationAp*>(req->user_ctx);
+            int st = this_->provision_state_.load();
+            const char* state = "idle";
+            if (st == 1) {
+                state = "connecting";
+            } else if (st == 2) {
+                state = "success";
+            } else if (st == 3) {
+                state = "fail";
+            }
+            std::string err;
+            if (st == 3) {
+                std::lock_guard<std::mutex> lock(this_->mutex_);
+                err = this_->provision_error_;
+            }
+            cJSON *obj = cJSON_CreateObject();
+            cJSON_AddStringToObject(obj, "state", state);
+            if (!err.empty()) {
+                cJSON_AddStringToObject(obj, "error", err.c_str());
+            }
+            char *printed = cJSON_PrintUnformatted(obj);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+            httpd_resp_sendstr(req, printed ? printed : "{\"state\":\"idle\"}");
+            cJSON_Delete(obj);
+            free(printed);
+            return ESP_OK;
+        },
+        .user_ctx = this
+    };
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &provision_status));
 
     auto captive_portal_handler = [](httpd_req_t *req) -> esp_err_t {
         auto *this_ = static_cast<WifiConfigurationAp *>(req->user_ctx);
@@ -769,6 +810,53 @@ void WifiConfigurationAp::Save(const std::string &ssid, const std::string &passw
 void WifiConfigurationAp::OnExitRequested(std::function<void()> callback)
 {
     on_exit_requested_ = callback;
+}
+
+void WifiConfigurationAp::BeginAsyncProvision(const std::string& ssid, const std::string& password)
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pending_ssid_ = ssid;
+        pending_password_ = password;
+        provision_error_.clear();
+    }
+    xTaskCreate(&WifiConfigurationAp::ProvisionTask, "prov_connect", 8192, this, 5, nullptr);
+}
+
+void WifiConfigurationAp::ProvisionTask(void* arg)
+{
+    auto* self = static_cast<WifiConfigurationAp*>(arg);
+    std::string ssid;
+    std::string password;
+    {
+        std::lock_guard<std::mutex> lock(self->mutex_);
+        ssid = self->pending_ssid_;
+        password = self->pending_password_;
+    }
+    bool ok = self->ConnectToWifi(ssid, password);
+    if (ok) {
+        self->Save(ssid, password);
+        self->provision_state_.store(2);
+        xTaskCreate([](void* ctx) {
+            auto* s = static_cast<WifiConfigurationAp*>(ctx);
+            for (int i = 0; i < 40; ++i) {
+                vTaskDelay(pdMS_TO_TICKS(200));
+                if (s->exit_scheduled_.load()) {
+                    vTaskDelete(NULL);
+                    return;
+                }
+            }
+            s->ScheduleExitConfigMode();
+            vTaskDelete(NULL);
+        }, "prov_watch", 4096, self, 5, nullptr);
+    } else {
+        {
+            std::lock_guard<std::mutex> lock(self->mutex_);
+            self->provision_error_ = "Failed to connect to the Access Point";
+        }
+        self->provision_state_.store(3);
+    }
+    vTaskDelete(NULL);
 }
 
 void WifiConfigurationAp::ScheduleExitConfigMode()

@@ -58,6 +58,9 @@ public:
     void ScheduleExitConfigMode();
 
 private:
+    void BeginAsyncProvision(const std::string& ssid, const std::string& password);
+    static void ProvisionTask(void* arg);
+
     std::mutex mutex_;
     std::unique_ptr<DnsServer> dns_server_;
     httpd_handle_t server_ = NULL;
@@ -70,6 +73,10 @@ private:
     esp_timer_handle_t scan_timer_ = nullptr;
     bool is_connecting_ = false;
     std::atomic<bool> exit_scheduled_{false};
+    std::atomic<int> provision_state_{0}; // 0 idle, 1 connecting, 2 success, 3 fail
+    std::string pending_ssid_;
+    std::string pending_password_;
+    std::string provision_error_;
     esp_netif_t* ap_netif_ = nullptr;
     esp_netif_t* sta_netif_ = nullptr;
     std::vector<wifi_ap_record_t> ap_records_;
