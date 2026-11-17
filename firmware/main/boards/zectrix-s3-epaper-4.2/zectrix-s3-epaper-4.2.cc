@@ -25,6 +25,7 @@
 #include "esp_network.h"
 #include "network_interface.h"
 #include "rtc_pcf8563.h"
+#include "settings.h"
 #include "ssid_manager.h"
 #include "ui/rawdraw_ui_manager.h"
 #include "wifi_manager.h"
@@ -32,6 +33,18 @@
 namespace {
 
 constexpr char kTag[] = "ZectrixFtBoard";
+constexpr char kNfcPrefsNamespace[] = "nfc";
+constexpr char kNfcEnabledKey[] = "enabled";
+
+bool ReadNfcEnabledPref() {
+    Settings nvs(kNfcPrefsNamespace, false);
+    return nvs.GetBool(kNfcEnabledKey, true);
+}
+
+void WriteNfcEnabledPref(bool enabled) {
+    Settings nvs(kNfcPrefsNamespace, true);
+    nvs.SetBool(kNfcEnabledKey, enabled);
+}
 constexpr uint16_t kNavLongPressMs = 1000;
 constexpr uint16_t kFactoryComboLongPressMs = 3000;
 static std::atomic<bool> s_up_held{false};
@@ -273,12 +286,17 @@ public:
     }
 
     void PrepareForDeepSleep() override {
-        // NFC VCC comes straight from its GPIO; keep it up so phones can still
-        // read and write the tag while the MCU sleeps.
-        if (nfc_ != nullptr) {
-            const gpio_num_t nfc_pwr = static_cast<gpio_num_t>(NFC_PWR_GPIO);
+        // NFC VCC comes straight from its GPIO. Hold the saved switch across
+        // sleep so an off switch stays unpowered and an on switch can still
+        // be read by a phone.
+        const bool nfc_enabled = ReadNfcEnabledPref();
+        const gpio_num_t nfc_pwr = static_cast<gpio_num_t>(NFC_PWR_GPIO);
+        if (nfc_ != nullptr && !nfc_enabled) {
+            nfc_->PowerOff();
+        } else {
             gpio_hold_dis(nfc_pwr);
-            gpio_set_level(nfc_pwr, 1);
+            gpio_set_direction(nfc_pwr, GPIO_MODE_OUTPUT);
+            gpio_set_level(nfc_pwr, nfc_enabled ? 1 : 0);
             gpio_hold_en(nfc_pwr);
         }
 
@@ -309,7 +327,8 @@ public:
             // PWR_ON latch: dropping it cuts the battery and powers the board off.
             power_->VbatPowerOn();
         }
-        ESP_LOGI(kTag, "Peripheral rails off for deep sleep (NFC kept powered)");
+        ESP_LOGI(kTag, "Peripheral rails off for deep sleep (NFC %s)",
+                 nfc_enabled ? "kept powered" : "left unpowered");
     }
 
 private:
@@ -369,7 +388,7 @@ private:
                                             NFC_PWR_GPIO,
                                             NFC_FD_GPIO,
                                             NFC_FD_ACTIVE_LEVEL);
-        if (!nfc_->Init()) {
+        if (!nfc_->Init(ReadNfcEnabledPref())) {
             ESP_LOGW(kTag, "NFC init failed");
             nfc_.reset();
         }
@@ -682,4 +701,24 @@ extern "C" void ZectrixSetFactoryLedOverride(bool enabled, bool blink) {
 extern "C" ZectrixNfc* ZectrixGetNfc() {
     auto& board = static_cast<CustomBoard&>(Board::GetInstance());
     return board.GetNfc();
+}
+
+bool ZectrixGetNfcEnabled() {
+    return ReadNfcEnabledPref();
+}
+
+void ZectrixSetNfcEnabled(bool enabled) {
+    WriteNfcEnabledPref(enabled);
+    ZectrixNfc* nfc = ZectrixGetNfc();
+    if (nfc == nullptr) {
+        ESP_LOGW(kTag, "NFC chip unavailable, saved enabled=%d", enabled ? 1 : 0);
+        return;
+    }
+    if (enabled) {
+        if (!nfc->PowerOn()) {
+            ESP_LOGW(kTag, "NFC power on failed");
+        }
+    } else {
+        nfc->PowerOff();
+    }
 }

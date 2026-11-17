@@ -127,7 +127,7 @@ ZectrixNfc::ZectrixNfc(i2c_master_bus_handle_t i2c_bus,
       fd_gpio_(fd_gpio),
       fd_active_level_(fd_active_level) {}
 
-bool ZectrixNfc::Init() {
+bool ZectrixNfc::Init(bool power_on) {
     bool expected = false;
     if (!initialized_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
         return true;
@@ -176,6 +176,17 @@ bool ZectrixNfc::Init() {
         ESP_LOGE(kTag, "failed to install NFC FD ISR: %s", esp_err_to_name(isr_ret));
         initialized_.store(false, std::memory_order_release);
         return false;
+    }
+
+    if (!power_on) {
+        ESP_LOGI(kTag,
+                 "NFC init: addr=0x%02X power_gpio=%d fd_gpio=%d fd_active=%d capacity=%u powered=0",
+                 static_cast<unsigned>(device_address_),
+                 power_gpio_,
+                 fd_gpio_,
+                 fd_active_level_,
+                 static_cast<unsigned>(kUserDataCapacity));
+        return true;
     }
 
     if (!PowerOn()) {

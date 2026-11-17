@@ -10,15 +10,17 @@
 
 namespace ui {
 
-constexpr int kSettingsVolumeIndex = 1;
-constexpr int kSettingsSlideshowIndex = 4;
-constexpr int kSettingsBroadcastIndex = 6;
-constexpr int kSettingsAutoSpeakIndex = 7;
-constexpr int kSettingsDayRefreshIndex = 8;
-constexpr int kSettingsNightRefreshIndex = 9;
-constexpr int kSettingsWifiIndex = 11;
-constexpr int kSettingsHttpServerIndex = 12;
-constexpr int kSettingsLanIpIndex = 13;
+constexpr int kSettingsBatteryIndex = 1;
+constexpr int kSettingsVolumeIndex = 2;
+constexpr int kSettingsNfcIndex = 3;
+constexpr int kSettingsSlideshowIndex = 6;
+constexpr int kSettingsBroadcastIndex = 8;
+constexpr int kSettingsAutoSpeakIndex = 9;
+constexpr int kSettingsDayRefreshIndex = 10;
+constexpr int kSettingsNightRefreshIndex = 11;
+constexpr int kSettingsWifiIndex = 13;
+constexpr int kSettingsHttpServerIndex = 14;
+constexpr int kSettingsLanIpIndex = 15;
 
 }  // namespace ui
 

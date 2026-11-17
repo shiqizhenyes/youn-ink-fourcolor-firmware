@@ -140,8 +140,35 @@ void ClearDialogRegionRounded(uint8_t* fb, int width, int height,
                         ThemeManager::Get().Style(ThemeToken::BackgroundPrimary));
 }
 
+void DrawNfcMark(uint8_t* fb, int width, int x, int center_y, Color color) {
+    // Two-pixel contactless mark. The settings font has no NFC glyph.
+    for (int dy = -1; dy <= 0; ++dy) {
+        for (int dx = 0; dx <= 1; ++dx) {
+            set_pixel(fb, width, x + dx, center_y + dy, color);
+        }
+    }
+    const int outers[] = {5, 8, 11};
+    for (int outer : outers) {
+        const int inner2 = (outer - 2) * (outer - 2);
+        const int outer2 = outer * outer;
+        for (int dy = -outer; dy <= outer; ++dy) {
+            const int abs_dy = dy < 0 ? -dy : dy;
+            for (int dx = 1; dx <= outer; ++dx) {
+                const int d2 = dx * dx + dy * dy;
+                if (d2 > outer2 || d2 <= inner2 || abs_dy > dx) continue;
+                set_pixel(fb, width, x + dx, center_y + dy, color);
+            }
+        }
+    }
+}
+
 [[maybe_unused]] void DrawSettingsVectorIcon(uint8_t* fb, int width, const std::string& label,
                                              int x, int center_y, Color color) {
+    if (label == "NFC") {
+        DrawNfcMark(fb, width, x, center_y, color);
+        return;
+    }
+
     // FontAwesome 16px icons. Album and weather match the quick-switch popup.
     const lv_font_t* icon_font = &fa_settings_16;
     const char* icon_char = nullptr;
@@ -180,7 +207,7 @@ void ClearDialogRegionRounded(uint8_t* fb, int width, int height,
         icon_char = "\xef\x81\x9a";  // U+F05A info-circle
     } else if (label == "音量") {
         icon_char = "\xef\x80\xa8";  // U+F028 volume-up
-    } else if (label == "电池方向") {
+    } else if (label == "电池" || label == "电池方向") {
         icon_char = "\xef\x89\x80";  // U+F240 battery-full
     } else if (label == "重启") {
         icon_char = "\xef\x80\xa1";  // U+F021 sync/refresh (旋转)
@@ -717,11 +744,20 @@ void SettingsRenderer::RenderItem(uint8_t* fb, int width, int y,
         // showed square border pixels on the previous RectBorder-based knob.
         DrawCircle(fb, width, {knob_cx, row_center_y - 1}, knob / 2, theme.Style(ThemeToken::BackgroundPrimary).bg);
         DrawCircleBorder(fb, width, {knob_cx, row_center_y - 1}, knob / 2, 1, text_style.fg);
-    } else if (item.type == SettingsItemType::Slider) {
-        char value_buf[8];
-        snprintf(value_buf, sizeof(value_buf), "%d%%", item.slider_value);
-        // Reserve the width of "100%" so the bar does not shift as the value changes.
-        const int value_col_w = MeasureTextWidth("100%", value_font_);
+    } else if (item.type == SettingsItemType::Slider ||
+               item.type == SettingsItemType::Meter) {
+        const bool known = item.slider_value >= 0;
+        const bool meter = item.type == SettingsItemType::Meter;
+        char value_buf[16];
+        if (!known) {
+            snprintf(value_buf, sizeof(value_buf), "--");
+        } else if (meter) {
+            snprintf(value_buf, sizeof(value_buf), "%d", item.slider_value);
+        } else {
+            snprintf(value_buf, sizeof(value_buf), "%d%%", item.slider_value);
+        }
+        // Reserve the width of "100%" so a volume slider does not shift.
+        const int value_col_w = MeasureTextWidth(meter ? "100" : "100%", value_font_);
         const int value_w = MeasureTextWidth(value_buf, value_font_);
         DrawText(fb, width, content_right - value_w,
                  InkCenteredTextTopY(value_font_, value_buf, row_center_y, kValueOpticalNudgeY),
@@ -736,7 +772,8 @@ void SettingsRenderer::RenderItem(uint8_t* fb, int width, int y,
                             Style::kBorderRadiusPill, theme.Style(ThemeToken::BackgroundPrimary));
         DrawRectBorder(fb, width, {track_x, track_y, track_w, track_h}, 1,
                        theme.Component(ComponentRole::Progress).border);
-        const int fill_w = (track_w - 4) * item.slider_value / 100;
+        const int fill_value = known ? item.slider_value : 0;
+        const int fill_w = (track_w - 4) * fill_value / 100;
         if (fill_w > 0) {
             DrawRect(fb, width, {track_x + 2, track_y + 2, fill_w, track_h - 4}, BLACK);
         }
@@ -1141,6 +1178,15 @@ void SettingsRenderer::UpdateSlider(int index, int value) {
         items_[index].slider_value = std::clamp(value, 0, 100);
         needs_full_refresh_ = true;
     }
+}
+
+void SettingsRenderer::UpdateMeter(int index, int value) {
+    if (index < 0 || index >= static_cast<int>(items_.size())) return;
+    if (items_[index].type != SettingsItemType::Meter) return;
+    const int next = value < 0 ? -1 : std::clamp(value, 0, 100);
+    if (items_[index].slider_value == next) return;
+    items_[index].slider_value = next;
+    needs_full_refresh_ = true;
 }
 
 bool SettingsRenderer::SelectedIsSlider() const {

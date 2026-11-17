@@ -4,6 +4,7 @@
 #include "boards/zectrix-s3-epaper-4.2/custom_lcd_display.h"
 #include "boards/zectrix-s3-epaper-4.2/config.h"
 #include "board.h"
+#include "boards/zectrix/zectrix_nfc.h"
 #include "common/qweather_client.h"
 #include "common/photo_storage.h"
 #include "common/power_diag.h"
@@ -37,6 +38,7 @@ constexpr char kTag[] = "Application";
 constexpr char kGalleryNamespace[] = "gallery";
 constexpr char kSlideshowIntervalKey[] = "slide_min";
 using ui::kSettingsAutoSpeakIndex;
+using ui::kSettingsBatteryIndex;
 using ui::kSettingsBroadcastIndex;
 using ui::kSettingsDayRefreshIndex;
 using ui::kSettingsHttpServerIndex;
@@ -241,12 +243,23 @@ void Application::Initialize() {
 
         std::vector<rawdraw::SettingsItemDef> items;
         items.push_back({"系统", "", nullptr, rawdraw::SettingsItemType::Section, false});
+        int battery_level = -1;
+        bool battery_charging = false;
+        bool battery_discharging = false;
+        if (!board.GetBatteryLevel(battery_level, battery_charging, battery_discharging)) {
+            battery_level = -1;
+        }
+        rawdraw::SettingsItemDef battery_item{"电池", "", nullptr, rawdraw::SettingsItemType::Meter, false};
+        battery_item.slider_value = battery_level;
+        items.push_back(std::move(battery_item));
         rawdraw::SettingsItemDef volume_item{"音量", "", nullptr, rawdraw::SettingsItemType::Slider, false};
         volume_item.slider_value = codec->output_volume();
         volume_item.on_slider = [codec](int volume) {
             codec->SetOutputVolume(volume);
         };
         items.push_back(std::move(volume_item));
+        items.push_back({"NFC", "", nullptr, rawdraw::SettingsItemType::Checkbox, ZectrixGetNfcEnabled(),
+                         []() { ZectrixSetNfcEnabled(!ZectrixGetNfcEnabled()); }});
         items.push_back({"重启", "执行", nullptr, rawdraw::SettingsItemType::Action, false,
                          []() { esp_restart(); }});
         items.push_back({"相册", "", nullptr, rawdraw::SettingsItemType::Section, false});
@@ -547,6 +560,17 @@ void Application::SetupInkWeather() {
             defer_wake_refresh_ = false;
             weather_wait_clock_ = false;
             wake_refresh_cancelled_ = true;
+        }
+        if (page == ui::RawDrawPageId::Settings) {
+            int level = -1;
+            bool charging = false;
+            bool discharging = false;
+            if (!Board::GetInstance().GetBatteryLevel(level, charging, discharging)) {
+                level = -1;
+            }
+            if (auto* settings = rawdraw_ui_manager_->GetSettingsRenderer()) {
+                settings->UpdateMeter(kSettingsBatteryIndex, level);
+            }
         }
         OnWeatherPageSwitched(page == ui::RawDrawPageId::Weather);
     });
@@ -1401,7 +1425,7 @@ void Application::UpdateStatusBarForUi(bool request_panel_refresh) {
     int battery_level = -1;
     bool charging = false;
     bool discharging = false;
-    board.GetBatteryLevel(battery_level, charging, discharging);
+    const bool battery_ok = board.GetBatteryLevel(battery_level, charging, discharging);
 
     if (rawdraw_ui_manager_) {
         const bool wifi_connected = wifi_connected_.load(std::memory_order_acquire);
@@ -1412,6 +1436,7 @@ void Application::UpdateStatusBarForUi(bool request_panel_refresh) {
         data.server_connected = http_server_running;
         data.battery_level = battery_level;
         data.battery_charging = charging;
+        data.battery_vertical = true;
         rawdraw_ui_manager_->UpdateStatusBar(data);
         UpdateWifiSettingsItem(rawdraw_ui_manager_->GetSettingsRenderer(), wifi_connected);
         const std::string lan_ip = wifi_connected ? WifiManager::GetInstance().GetIpAddress() : "";
@@ -1421,6 +1446,9 @@ void Application::UpdateStatusBarForUi(bool request_panel_refresh) {
                                      rawdraw_ui_manager_->IsLanHttpServerRunning()
                                          ? lan_ip
                                          : "");
+        if (auto* settings = rawdraw_ui_manager_->GetSettingsRenderer()) {
+            settings->UpdateMeter(kSettingsBatteryIndex, battery_ok ? battery_level : -1);
+        }
         // Quiet timer wakes refresh the panel once, when their own work is done.
         // Sleep teardown must not queue a new ~20s four-color refresh before PowerEpdOff.
         if (request_panel_refresh &&

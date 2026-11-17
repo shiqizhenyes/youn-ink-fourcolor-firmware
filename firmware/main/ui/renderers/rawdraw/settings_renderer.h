@@ -27,6 +27,7 @@ enum class SettingsItemType {
     Action,    ///< Action button (highlighted style)
     Section,   ///< Section header (non-interactive label)
     Slider,    ///< 0-100 value bar; long-press UP/DOWN adjusts it while selected
+    Meter,     ///< Read-only 0-100 bar. slider_value < 0 draws an empty bar and "--"
 };
 
 /**
@@ -39,7 +40,7 @@ struct SettingsItemDef {
     SettingsItemType type = SettingsItemType::Normal;
     bool checked = false;
     std::function<void()> on_click;
-    int slider_value = 0;                   ///< Slider only, 0..100
+    int slider_value = 0;                   ///< Slider and Meter, 0..100. Meter uses <0 for unknown
     std::function<void(int)> on_slider;     ///< Slider only, called with the new value
 };
 
@@ -69,6 +70,11 @@ public:
     void UpdateItem(int index, const std::string& value);
     void UpdateChecked(int index, bool checked);
     void UpdateSlider(int index, int value);
+    /**
+     * @brief Set a Meter row. Values below 0 mean unknown and draw "--"
+     * @note Does not mark a refresh when the stored value is unchanged
+     */
+    void UpdateMeter(int index, int value);
     /**
      * @brief Step the selected Slider row by delta (clamped to 0..100)
      * @param changed set when the value actually moves; unchanged at 0 or 100

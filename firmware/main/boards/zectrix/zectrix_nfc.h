@@ -39,7 +39,10 @@ public:
                int fd_active_level);
     ~ZectrixNfc() = default;
 
-    bool Init();
+    /**
+     * @brief Configure the chip. power_on false leaves the rail off and skips the probe
+     */
+    bool Init(bool power_on = true);
     bool PowerOn();
     void PowerOff();
     bool IsPowered() const;
@@ -91,5 +94,10 @@ private:
     std::unique_ptr<ScopedI2cBusLock> i2c_session_lock_;
     std::function<void(bool)> field_callback_;
 };
+
+/** @brief Saved NFC power switch. Unset means on, matching the previous always-on rail. */
+bool ZectrixGetNfcEnabled();
+/** @brief Persist the switch and power the chip to match. A missing chip is only logged. */
+void ZectrixSetNfcEnabled(bool enabled);
 
 #endif  // ZECTRIX_NFC_H

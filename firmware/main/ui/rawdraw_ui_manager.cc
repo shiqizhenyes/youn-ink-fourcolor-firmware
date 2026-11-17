@@ -96,9 +96,10 @@ void DrawBatteryIcon(uint8_t* fb, int width, int x, int y, int level, bool verti
         : rawdraw::ThemeManager::Get().Style(rawdraw::ThemeToken::TextPrimary).fg;
     if (vertical) {
         const int body_w = 9;
+        const int cap_h = 2;
         const int body_h = 14;
-        rawdraw::DrawRectBorder(fb, width, {x, y + 2, body_w, body_h}, 1, battery_color);
-        rawdraw::DrawRect(fb, width, {x + 3, y, 3, 2}, battery_color);
+        rawdraw::DrawRectBorder(fb, width, {x, y + cap_h, body_w, body_h}, 1, battery_color);
+        rawdraw::DrawRect(fb, width, {x + 3, y, 3, cap_h}, battery_color);
         const int seg_h = 3;
         const int gap = 1;
         const int filled = level >= 90 ? 3 : (level >= 50 ? 2 : (level > 10 ? 1 : 0));
@@ -329,7 +330,7 @@ RawDrawUiManager::RawDrawUiManager()
     status_bar_data_.server_connected = false;
     status_bar_data_.battery_level = -1;
     status_bar_data_.battery_charging = false;
-    status_bar_data_.battery_vertical = false;
+    status_bar_data_.battery_vertical = true;
 
     ESP_LOGI(kTag, "RawDraw UI Manager created (no LVGL)");
 }
