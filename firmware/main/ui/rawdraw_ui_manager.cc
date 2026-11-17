@@ -1302,6 +1302,7 @@ void RawDrawUiManager::RefreshRect(const rawdraw::Rect& rect, bool urgent) {
         xSemaphoreGive(mutex);
         mutex = nullptr;
     }
+    ApplyRefreshWaveform();
     refresh_cb_(refresh_rect, urgent);
 }
 
@@ -1327,6 +1328,7 @@ void RawDrawUiManager::TriggerRefresh(bool urgent) {
         if (mutex) xSemaphoreGive(mutex);
         mutex = nullptr;
 
+        ApplyRefreshWaveform();
         refresh_cb_(full_rect, urgent);
     }
 
@@ -1337,6 +1339,12 @@ void RawDrawUiManager::TriggerRefresh(bool urgent) {
         // The refresh callback should handle full vs partial refresh
         // based on the urgent flag or other state
     }
+}
+
+void RawDrawUiManager::ApplyRefreshWaveform() {
+    if (!lcd_) return;
+    const bool fast = current_page_ == RawDrawPageId::Settings || quick_switch_open_;
+    lcd_->SetFastBlackYellowRefresh(fast);
 }
 
 void RawDrawUiManager::RequestFullRefresh() {

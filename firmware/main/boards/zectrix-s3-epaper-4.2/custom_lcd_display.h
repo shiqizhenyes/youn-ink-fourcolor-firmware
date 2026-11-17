@@ -82,6 +82,9 @@ public:
     // Notify when refresh transitions from busy to idle.
     void SetOnRefreshIdle(std::function<void()> cb);
     void SetNextKickMs(uint32_t kick_ms);
+    // Settings and the quick-switch popup use the black/yellow RAM waveform.
+    // Other screens keep the factory waveform. Ignored on the 1bpp panel.
+    void SetFastBlackYellowRefresh(bool enable);
     
 private:
     const custom_lcd_spi_t lcd_spi_data;
@@ -133,6 +136,17 @@ private:
     void EPD_SetFullWindowAndCounter(); // ***关键：恢复全屏窗口+计数器***
     bool IsFourColorPanel() const { return panel_type_ == EPD_PANEL_4COLOR_SSD2683; }
     void EPD_DisplayFourColorTestPattern();
+    bool read_busy_for(int timeout_ms);
+    bool EPD_InitFastBlackYellow();
+    bool EPD_LoadFastLut();
+    bool EPD_DisplaySolidYellow();
+    bool EPD_TurnOnFast();
+    void EPD_ReleaseFastSession();
+    bool EPD_RefreshFastBlackYellow(const uint8_t* frame);
+    void StoreFastMask(const uint8_t* frame);
+    bool FastMaskBlack(int pixel) const;
+    void WaitForFastInterval();
+    void InvalidateFastBaseline();
 
     // Helper functions for partial display
     void bitInterleave(unsigned char bytes1, unsigned char bytes2);
@@ -158,6 +172,12 @@ private:
 
     bool urgent_refresh = false;
     bool force_full_refresh_ = false;
+    bool fast_black_yellow_ = false;
+    bool fast_baseline_valid_ = false;
+    bool fast_session_ready_ = false;
+    uint8_t* fast_mask_ = nullptr;
+    size_t fast_mask_bytes_ = 0;
+    int64_t last_fast_start_us_ = 0;
     TickType_t last_sample_tick = 0;
     int sample_interval_ms = 300; // 节流：采样间隔（可调 200~800）
 

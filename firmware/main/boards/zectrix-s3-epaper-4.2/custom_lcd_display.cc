@@ -6,6 +6,7 @@
 #include <esp_heap_caps.h>
 #include <esp_rom_sys.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -17,6 +18,7 @@
 #endif
 #include "settings.h"
 #include "custom_lcd_display.h"
+#include "epd_fast_waveform.h"
 #include "rawdraw/rawdraw.h"
 #include "rawdraw/framebuffer.h"
 #include "common/sleep_manager.h"
@@ -223,6 +225,13 @@ CustomLcdDisplay::CustomLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_p
     assert(tx_buf);
     memset(tx_buf, WhiteFillByte(), lcd_spi_data.buffer_len);
 
+    if (IsFourColorPanel()) {
+        fast_mask_bytes_ = (static_cast<size_t>(Width) * static_cast<size_t>(Height) + 7) / 8;
+        fast_mask_ = static_cast<uint8_t*>(heap_caps_malloc(fast_mask_bytes_, MALLOC_CAP_SPIRAM));
+        assert(fast_mask_);
+        memset(fast_mask_, 0, fast_mask_bytes_);
+    }
+
 #ifdef HAVE_LVGL
     display_ = lv_display_create(width, height);
     lv_display_set_flush_cb(display_, lvgl_flush_cb);
@@ -294,6 +303,10 @@ CustomLcdDisplay::~CustomLcdDisplay() {
         vSemaphoreDelete(dirty_mutex);
         dirty_mutex = nullptr;
     }
+    if (fast_mask_) {
+        heap_caps_free(fast_mask_);
+        fast_mask_ = nullptr;
+    }
     // 如需释放 buffer/prev_buffer/tx_buf 可在此处补充
 }
 
@@ -347,7 +360,7 @@ static FrameDiffResult analyze_frame_diff(
 
 void CustomLcdDisplay::start_refresh_task() {
     if (refresh_task) return;
-    xTaskCreatePinnedToCore(refresh_task_entry, "epd_refresh", 4096, this, 3, &refresh_task, 1);
+    xTaskCreatePinnedToCore(refresh_task_entry, "epd_refresh", 8192, this, 3, &refresh_task, 1);
 }
 
 void CustomLcdDisplay::stop_refresh_task() {
@@ -533,8 +546,12 @@ void CustomLcdDisplay::refresh_task_loop() {
             refresh_in_progress = true;
         }
         UpdateDisplayBusyLocked();
+        const bool release_fast = fast_session_ready_ && !fast_black_yellow_;
         (void)CheckRefreshIdleLocked();
         xSemaphoreGive(dirty_mutex);
+        if (release_fast) {
+            EPD_ReleaseFastSession();
+        }
 
         // 周期性采样：按 last_sample_tick 计时，非刷新结束时间
         TickType_t min_ticks = pdMS_TO_TICKS(sample_interval_ms);
@@ -543,9 +560,10 @@ void CustomLcdDisplay::refresh_task_loop() {
             if (elapsed < min_ticks) {
                 stat_skip_throttle++;
                 maybe_log_stats(now);
-                // Avoid spinning when notifications arrive too frequently.
+                // A settings or quick-switch request notifies this task. Sleep
+                // only until that notify, not for the rest of the 12s slot.
                 TickType_t wait_ticks = min_ticks - elapsed;
-                vTaskDelay(wait_ticks > 0 ? wait_ticks : 1);
+                ulTaskNotifyTake(pdTRUE, wait_ticks > 0 ? wait_ticks : 1);
                 continue;
             }
         }
@@ -563,12 +581,26 @@ void CustomLcdDisplay::refresh_task_loop() {
                 ESP_LOGI(TAG, "[REFRESH] Debounce merged dirty: x=%d, y=%d, w=%d, h=%d, area=%d",
                          r.x, r.y, r.w, r.h, rect_area(r));
             }
+            const bool hurry = urgent_refresh;
+            if (hurry) {
+                urgent = true;
+                urgent_refresh = false;
+                if (force_full_refresh_) {
+                    force_full = true;
+                    force_full_refresh_ = false;
+                }
+            }
             xSemaphoreGive(dirty_mutex);
+            if (hurry) {
+                break;
+            }
         }
 
         // Take full-frame snapshot into tx_buf under mutex (avoid tearing)
+        bool want_fast = false;
         xSemaphoreTake(dirty_mutex, portMAX_DELAY);
         memcpy(tx_buf, buffer, lcd_spi_data.buffer_len);
+        want_fast = fast_black_yellow_ && IsFourColorPanel() && fast_mask_ != nullptr;
         xSemaphoreGive(dirty_mutex);
         last_sample_tick = xTaskGetTickCount();
 
@@ -576,7 +608,7 @@ void CustomLcdDisplay::refresh_task_loop() {
         FrameDiffResult result = analyze_frame_diff(prev_buffer, tx_buf, Width, Height);
 
         // 快速退出：没有任何变化
-        if (result.diff_bits == 0 && !force_full) {
+        if (result.diff_bits == 0 && !force_full && !(want_fast && !fast_baseline_valid_)) {
             tiny_diff_streak = 0;
             tiny_diff_accum_bits = 0;
             tiny_diff_first_tick = 0;
@@ -631,6 +663,55 @@ void CustomLcdDisplay::refresh_task_loop() {
         ESP_LOGI(TAG, "[STRATEGY] Diff analysis: bits=%u/%u (%.2f%%)",
                  (unsigned)result.diff_bits, (unsigned)total_bits, result.diff_ratio * 100.0f);
 
+        if (want_fast) {
+            if (!fast_baseline_valid_) {
+                ESP_LOGW(TAG, "[REFRESH] Fast baseline missing, factory yellow clear");
+                if (EPD_DisplaySolidYellow()) {
+                    memset(fast_mask_, 0, fast_mask_bytes_);
+                    fast_baseline_valid_ = true;
+                }
+            }
+            xSemaphoreTake(dirty_mutex, portMAX_DELAY);
+            memcpy(tx_buf, buffer, lcd_spi_data.buffer_len);
+            want_fast = fast_black_yellow_ && IsFourColorPanel() && fast_mask_ != nullptr;
+            xSemaphoreGive(dirty_mutex);
+            if (want_fast && fast_baseline_valid_) {
+                stat_refresh++;
+                if (urgent) {
+                    stat_urgent++;
+                }
+                last_fast_start_us_ = esp_timer_get_time();
+                ESP_LOGW(TAG, "[REFRESH] Performing black/yellow fast refresh");
+                const bool ok = EPD_RefreshFastBlackYellow(tx_buf);
+                if (ok) {
+                    StoreFastMask(tx_buf);
+                    memcpy(prev_buffer, tx_buf, lcd_spi_data.buffer_len);
+                    prev_buffer_synced = true;
+                    partial_since_full = 0;
+                } else {
+                    InvalidateFastBaseline();
+                    ESP_LOGE(TAG, "[REFRESH] Fast black/yellow refresh failed");
+                }
+                xSemaphoreTake(dirty_mutex, portMAX_DELAY);
+                refresh_in_progress = false;
+                UpdateDisplayBusyLocked();
+                bool fire_idle_cb = CheckRefreshIdleLocked();
+                xSemaphoreGive(dirty_mutex);
+                if (fire_idle_cb && on_refresh_idle_) {
+                    on_refresh_idle_();
+                }
+                tiny_diff_streak = 0;
+                tiny_diff_accum_bits = 0;
+                tiny_diff_first_tick = 0;
+                maybe_log_stats(xTaskGetTickCount());
+                continue;
+            }
+        }
+
+        if (fast_session_ready_) {
+            EPD_ReleaseFastSession();
+        }
+
         // Decide FULL vs PARTIAL
         bool should_full = !prev_buffer_synced || !prev_buffer;
         if (!should_full && force_full) {
@@ -661,6 +742,7 @@ void CustomLcdDisplay::refresh_task_loop() {
             memcpy(prev_buffer, tx_buf, lcd_spi_data.buffer_len);
             prev_buffer_synced = true;
             partial_since_full = 0;
+            InvalidateFastBaseline();
         } else
         {
             stat_partial++;
@@ -670,6 +752,7 @@ void CustomLcdDisplay::refresh_task_loop() {
             memcpy(prev_buffer, tx_buf, lcd_spi_data.buffer_len);
             prev_buffer_synced = true;
             partial_since_full++;
+            InvalidateFastBaseline();
         }
         xSemaphoreTake(dirty_mutex, portMAX_DELAY);
         refresh_in_progress = false;
@@ -805,6 +888,266 @@ void CustomLcdDisplay::read_busy() {
     }
 }
 
+bool CustomLcdDisplay::read_busy_for(int timeout_ms) {
+    const int64_t start = esp_timer_get_time();
+    const int64_t limit = static_cast<int64_t>(timeout_ms) * 1000;
+    while (gpio_get_level((gpio_num_t)lcd_spi_data.busy) == 0) {
+        if (esp_timer_get_time() - start > limit) {
+            ESP_LOGE(TAG, "EPD busy timeout after %d ms", timeout_ms);
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    return true;
+}
+
+void CustomLcdDisplay::SetFastBlackYellowRefresh(bool enable) {
+    if (!IsFourColorPanel()) {
+        return;
+    }
+    if (dirty_mutex) {
+        xSemaphoreTake(dirty_mutex, portMAX_DELAY);
+    }
+    fast_black_yellow_ = enable;
+    if (dirty_mutex) {
+        xSemaphoreGive(dirty_mutex);
+    }
+    if (!enable && refresh_task) {
+        xTaskNotifyGive(refresh_task);
+    }
+}
+
+void CustomLcdDisplay::InvalidateFastBaseline() {
+    fast_baseline_valid_ = false;
+}
+
+void CustomLcdDisplay::WaitForFastInterval() {
+    if (last_fast_start_us_ == 0) {
+        return;
+    }
+    const int64_t remain_us = 1000000 - (esp_timer_get_time() - last_fast_start_us_);
+    if (remain_us > 0) {
+        vTaskDelay(pdMS_TO_TICKS((remain_us + 999) / 1000));
+    }
+}
+
+bool CustomLcdDisplay::FastMaskBlack(int pixel) const {
+    if (!fast_mask_ || pixel < 0) {
+        return false;
+    }
+    const size_t index = static_cast<size_t>(pixel) >> 3;
+    if (index >= fast_mask_bytes_) {
+        return false;
+    }
+    const uint8_t bit = static_cast<uint8_t>(0x80 >> (pixel & 7));
+    return (fast_mask_[index] & bit) != 0;
+}
+
+void CustomLcdDisplay::StoreFastMask(const uint8_t* frame) {
+    if (!fast_mask_ || !frame) {
+        return;
+    }
+    memset(fast_mask_, 0, fast_mask_bytes_);
+    const int bytes_per_row = (Width * 2 + 7) >> 3;
+    for (int y = 0; y < Height; ++y) {
+        const uint8_t* row = frame + y * bytes_per_row;
+        for (int x = 0; x < Width; ++x) {
+            const uint8_t shift = static_cast<uint8_t>(6 - ((x & 3) << 1));
+            if (((row[x >> 2] >> shift) & 0x03) != 0) {
+                continue;
+            }
+            const int pixel = y * Width + x;
+            const size_t index = static_cast<size_t>(pixel) >> 3;
+            fast_mask_[index] |= static_cast<uint8_t>(0x80 >> (pixel & 7));
+        }
+    }
+}
+
+bool CustomLcdDisplay::EPD_LoadFastLut() {
+    // RAM waveform only. Commands 0x90, 0x91 and 0xA2 would program OTP and are never sent.
+    const uint8_t* lut = RefreshWaveforms::kPartial;
+    constexpr int kLutBytes = static_cast<int>(sizeof(RefreshWaveforms::kPartial));
+    set_dc_0();
+    set_cs_0();
+    SPI_SendByte(0x20);
+    set_dc_1();
+    uint8_t chunk[64];
+    bool ok = true;
+    for (int offset = 0; offset < kLutBytes; ) {
+        const int remain = kLutBytes - offset;
+        const int n = remain < 64 ? remain : 64;
+        memcpy(chunk, lut + offset, n);
+        spi_transaction_t transaction = {};
+        transaction.length = n * 8;
+        transaction.tx_buffer = chunk;
+        if (spi_device_polling_transmit(spi, &transaction) != ESP_OK) {
+            ok = false;
+            break;
+        }
+        offset += n;
+    }
+    set_cs_1();
+    return ok;
+}
+
+bool CustomLcdDisplay::EPD_InitFastBlackYellow() {
+    const uint8_t* lut = RefreshWaveforms::kPartial;
+    EPD_PowerOn();
+    set_cs_1();
+    set_rst_0();
+    vTaskDelay(pdMS_TO_TICKS(20));
+    set_rst_1();
+    vTaskDelay(pdMS_TO_TICKS(100));
+    if (!read_busy_for(10000)) {
+        EPD_PowerOff();
+        return false;
+    }
+
+    EPD_SendCommand(0x00);
+    EPD_SendData(0x2F);
+    EPD_SendData(0xA9);
+    EPD_SendCommand(0x01);
+    EPD_SendData(0x07);
+    EPD_SendData(lut[0]);
+    EPD_SendData(lut[1]);
+    EPD_SendData(lut[2]);
+    EPD_SendData(lut[3]);
+    EPD_SendData(lut[4]);
+    EPD_SendCommand(0x30);
+    EPD_SendData(lut[6]);
+    EPD_SendCommand(0x82);
+    EPD_SendData(lut[5]);
+    EPD_SendCommand(0x06);
+    EPD_SendData(0x0F);
+    EPD_SendData(0x8B);
+    EPD_SendData(0x9C);
+    EPD_SendData(0xA5);
+    EPD_SendCommand(0xE7);
+    EPD_SendData(0xA5);
+    EPD_SendCommand(0x50);
+    EPD_SendData(0x97);
+    EPD_SendCommand(0x61);
+    EPD_SendData(0x01);
+    EPD_SendData(0x90);
+    EPD_SendData(0x01);
+    EPD_SendData(0x2C);
+    EPD_SendCommand(0x62);
+    EPD_SendData(0x62);
+    EPD_SendData(0x51);
+    EPD_SendCommand(0x65);
+    EPD_SendData(0x00);
+    EPD_SendData(0x00);
+    EPD_SendData(0x00);
+    EPD_SendData(0x00);
+    EPD_SendCommand(0xE9);
+    EPD_SendData(0x01);
+    if (!EPD_LoadFastLut()) {
+        EPD_PowerOff();
+        return false;
+    }
+    return true;
+}
+
+bool CustomLcdDisplay::EPD_DisplaySolidYellow() {
+    const int bytes_per_row = (Width * 2 + 7) >> 3;
+    uint8_t line[128];
+    if (bytes_per_row <= 0 || bytes_per_row > static_cast<int>(sizeof(line))) {
+        return false;
+    }
+    memset(line, 0xAA, bytes_per_row);
+    EPD_Init();
+    EPD_SendCommand(0x10);
+    read_busy();
+    for (int y = 0; y < Height; ++y) {
+        writeBytes(line, bytes_per_row);
+    }
+    EPD_TurnOnDisplay();
+    return true;
+}
+
+bool CustomLcdDisplay::EPD_TurnOnFast() {
+    EPD_SendCommand(0x04);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    if (!read_busy_for(10000)) {
+        EPD_PowerOff();
+        return false;
+    }
+    EPD_SendCommand(0x12);
+    EPD_SendData(0x00);
+    const int64_t assert_start = esp_timer_get_time();
+    while (gpio_get_level((gpio_num_t)lcd_spi_data.busy) != 0) {
+        if (esp_timer_get_time() - assert_start > 500000) {
+            ESP_LOGE(TAG, "Fast refresh busy did not assert");
+            EPD_PowerOff();
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    if (!read_busy_for(10000)) {
+        EPD_PowerOff();
+        return false;
+    }
+    // Leave the controller powered and keep the RAM waveform loaded.
+    // The image is already updated once BUSY releases.
+    fast_session_ready_ = true;
+    return true;
+}
+
+void CustomLcdDisplay::EPD_ReleaseFastSession() {
+    if (!fast_session_ready_) {
+        return;
+    }
+    fast_session_ready_ = false;
+    EPD_SendCommand(0x02);
+    EPD_SendData(0x00);
+    vTaskDelay(pdMS_TO_TICKS(20));
+    read_busy_for(10000);
+    EPD_SendCommand(0x07);
+    EPD_SendData(0xA5);
+    vTaskDelay(pdMS_TO_TICKS(20));
+    EPD_PowerOff();
+}
+
+bool CustomLcdDisplay::EPD_RefreshFastBlackYellow(const uint8_t* frame) {
+    if (!frame || !fast_mask_ || (Width % 4) != 0) {
+        return false;
+    }
+    if (!fast_session_ready_ && !EPD_InitFastBlackYellow()) {
+        return false;
+    }
+
+    const int bytes_per_row = (Width * 2 + 7) >> 3;
+    const int out_bytes = Width / 4;
+    uint8_t line[128];
+    if (out_bytes <= 0 || out_bytes > static_cast<int>(sizeof(line))) {
+        EPD_PowerOff();
+        return false;
+    }
+
+    EPD_SendCommand(0x10);
+    if (!read_busy_for(10000)) {
+        EPD_PowerOff();
+        return false;
+    }
+    for (int y = 0; y < Height; ++y) {
+        const uint8_t* row = frame + y * bytes_per_row;
+        for (int x = 0; x < Width; x += 4) {
+            uint8_t packed = 0;
+            for (int offset = 0; offset < 4; ++offset) {
+                const uint8_t shift = static_cast<uint8_t>(6 - (((x + offset) & 3) << 1));
+                const bool new_black = ((row[(x + offset) >> 2] >> shift) & 0x03) == 0;
+                const bool old_black = FastMaskBlack(y * Width + x + offset);
+                const uint8_t code = static_cast<uint8_t>((old_black ? 0 : 2) | (new_black ? 0 : 1));
+                packed = static_cast<uint8_t>((packed << 2) | code);
+            }
+            line[x / 4] = packed;
+        }
+        writeBytes(line, out_bytes);
+    }
+    const bool ok = EPD_TurnOnFast();
+    return ok;
+}
+
 // =======================================================
 // SPI wrappers
 // =======================================================
@@ -932,6 +1275,7 @@ void CustomLcdDisplay::EPD_PowerOn() {
 }
 
 void CustomLcdDisplay::EPD_PowerOff(){
+    fast_session_ready_ = false;
     // Drive every panel signal low before cutting 3V3_EPD so nothing back-powers
     // the unpowered panel; held so the levels also survive deep sleep.
     gpio_config_t park = {};
@@ -1169,6 +1513,7 @@ bool CustomLcdDisplay::DisplayRaw4ColorImage(const uint8_t* data, size_t len, in
     }
 
     EPD_TurnOnDisplay();
+    InvalidateFastBaseline();
     return true;
 }
 #if 0

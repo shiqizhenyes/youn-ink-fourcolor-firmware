@@ -701,7 +701,7 @@ void SettingsRenderer::RenderItem(uint8_t* fb, int width, int y,
         const int track_x = content_right - track_w;
         const int track_y = row_center_y - track_h / 2;
         label_right = track_x - Style::kSpacingLG;
-        const PaintStyle switch_style = item.checked ? theme.Style(ThemeToken::Accent)
+        const PaintStyle switch_style = item.checked ? MakePaint(WHITE, BLACK, BLACK)
                                                      : theme.Style(ThemeToken::Disabled);
         DrawStyledRoundRect(fb, width, 300, {track_x, track_y, track_w, track_h},
                             Style::kBorderRadiusPill, switch_style);
@@ -738,8 +738,7 @@ void SettingsRenderer::RenderItem(uint8_t* fb, int width, int y,
                        theme.Component(ComponentRole::Progress).border);
         const int fill_w = (track_w - 4) * item.slider_value / 100;
         if (fill_w > 0) {
-            DrawRect(fb, width, {track_x + 2, track_y + 2, fill_w, track_h - 4},
-                     TokenInkOnPaper(ThemeToken::ProgressFill));
+            DrawRect(fb, width, {track_x + 2, track_y + 2, fill_w, track_h - 4}, BLACK);
         }
     } else if (!item.value.empty()) {
         const int value_right = content_right - right_margin;
@@ -1343,7 +1342,6 @@ void SettingsRenderer::RenderStorageDialog(uint8_t* fb, int width, int height) {
     const Color border = theme.ColorFor(ThemeToken::Border);
     const PaintStyle track_style = theme.Style(ThemeToken::BackgroundPrimary);
     const Color accent = TokenInkOnPaper(ThemeToken::Accent);
-    const Color progress_fill = TokenInkOnPaper(ThemeToken::ProgressFill);
     const int dialog_w = 316;
     const int dialog_h = 180;
     const int dialog_x = (width - dialog_w) / 2;
@@ -1397,7 +1395,7 @@ void SettingsRenderer::RenderStorageDialog(uint8_t* fb, int width, int height) {
     DrawRectBorder(fb, width, {bar_x, bar_y, bar_w, bar_h}, 1, progress_style.border);
     int fill_w = (bar_w - 2) * fill_pct / 100;
     if (fill_w > 0) {
-        DrawRect(fb, width, {bar_x + 1, bar_y + 1, fill_w, bar_h - 2}, progress_fill);
+        DrawRect(fb, width, {bar_x + 1, bar_y + 1, fill_w, bar_h - 2}, BLACK);
     }
 
     // Info rows
@@ -1439,7 +1437,6 @@ void SettingsRenderer::RenderVolumeDialog(uint8_t* fb, int width, int height) {
     const Color border = theme.ColorFor(ThemeToken::Border);
     const PaintStyle track_style = theme.Style(ThemeToken::BackgroundPrimary);
     const Color accent = TokenInkOnPaper(ThemeToken::Accent);
-    const Color progress_fill = TokenInkOnPaper(ThemeToken::ProgressFill);
     const int dialog_w = 292;
     const int dialog_h = 166;
     const int dialog_x = (width - dialog_w) / 2;
@@ -1481,7 +1478,7 @@ void SettingsRenderer::RenderVolumeDialog(uint8_t* fb, int width, int height) {
     DrawRectBorder(fb, width, {track_x, track_y, track_w, track_h}, 1, progress_style.border);
     int fill_w = (track_w - 4) * volume_dialog_value_ / 100;
     if (fill_w > 0) {
-        DrawRect(fb, width, {track_x + 2, track_y + 2, fill_w, track_h - 4}, progress_fill);
+        DrawRect(fb, width, {track_x + 2, track_y + 2, fill_w, track_h - 4}, BLACK);
     }
 
     for (int i = 0; i <= 4; ++i) {
@@ -1793,7 +1790,6 @@ void SettingsRenderer::RenderOtaDialog(uint8_t* fb, int width, int height) {
     const Color border = theme.ColorFor(ThemeToken::Border);
     const PaintStyle track_style = theme.Style(ThemeToken::BackgroundPrimary);
     const Color danger = TokenInkOnPaper(ThemeToken::Danger);
-    const Color progress_fill = TokenInkOnPaper(ThemeToken::ProgressFill);
     const int dialog_w = 316;
     const int dialog_h = 220;
     const int dialog_x = (width - dialog_w) / 2;
@@ -1875,7 +1871,7 @@ void SettingsRenderer::RenderOtaDialog(uint8_t* fb, int width, int height) {
         DrawRectBorder(fb, width, {bar_x, bar_y, bar_w, bar_h}, 1, progress_style.border);
         const int fill_w = (bar_w - 4) * ota_progress_percent_ / 100;
         if (fill_w > 0) {
-            DrawRect(fb, width, {bar_x + 2, bar_y + 2, fill_w, bar_h - 4}, progress_fill);
+            DrawRect(fb, width, {bar_x + 2, bar_y + 2, fill_w, bar_h - 4}, BLACK);
         }
         char pct_buf[16];
         snprintf(pct_buf, sizeof(pct_buf), "%d%%", ota_progress_percent_);

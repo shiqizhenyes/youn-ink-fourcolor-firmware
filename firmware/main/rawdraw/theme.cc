@@ -282,9 +282,24 @@ PaintStyle ThemeManager::Component(ComponentRole role) const {
             return Style(ThemeToken::Accent);
         case ComponentRole::ButtonSelected:
         case ComponentRole::TodoSelected:
+            return Style(ThemeToken::Selected);
         case ComponentRole::SettingsSelected:
         case ComponentRole::QuickSwitchRow:
+#if CONFIG_ZECTRIX_EPD_PANEL_4COLOR_SSD2683
+        {
+            // Black selection with yellow text on the four-color panel.
+            // Border width stays 1.
+            PaintStyle selected = Style(ThemeToken::Selected);
+            selected.fg = YELLOW;
+            selected.bg = BLACK;
+            selected.border = BLACK;
+            selected.border_width = 1;
+            selected.dither = DitherToken::None;
+            return selected;
+        }
+#else
             return Style(ThemeToken::Selected);
+#endif
         case ComponentRole::ButtonDisabled:
         case ComponentRole::TodoCompleted:
             return Style(ThemeToken::Disabled);
