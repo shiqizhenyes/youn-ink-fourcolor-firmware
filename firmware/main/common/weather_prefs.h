@@ -57,6 +57,14 @@ int NormalizeRefreshMinutes(int minutes, int fallback);
 /** @return the refresh interval (minutes, 0 = off) that applies at minute_of_day */
 int RefreshMinAt(int minute_of_day);
 /**
+ * @brief Interval used to decide whether a cached forecast is still valid
+ *
+ * Uses the current day or night interval when it is on. When that one is off,
+ * uses the other interval if it is on. Returns 0 when both are off, which
+ * means the cache is treated as expired and is not fetched automatically.
+ */
+int CacheCompareIntervalMin(int minute_of_day);
+/**
  * @brief Seconds until the next clock-aligned wake for a sleep interval.
  *
  * Sleep a full `interval_min` unless the next alignment mark is closer:

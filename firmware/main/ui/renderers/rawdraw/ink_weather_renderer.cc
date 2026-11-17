@@ -126,6 +126,14 @@ void InkWeatherRenderer::SetData(const ink::WeatherData& data) {
     needs_full_refresh_ = true;
 }
 
+void InkWeatherRenderer::ClearDisplayedData() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    data_ = {};
+    loading_ = false;
+    failed_ = false;
+    needs_full_refresh_ = true;
+}
+
 bool InkWeatherRenderer::HasData() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return data_.valid;

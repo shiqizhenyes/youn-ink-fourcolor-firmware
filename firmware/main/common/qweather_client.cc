@@ -107,9 +107,10 @@ bool QWeatherClient::IsCacheFresh() const {
     const time_t now = time(nullptr);
     struct tm local_tm = {};
     localtime_r(&now, &local_tm);
-    const int interval_min = RefreshMinAt(local_tm.tm_hour * 60 + local_tm.tm_min);
-    const int64_t max_age = interval_min > 0 ? interval_min * 60 : kWeatherCacheMaxAgeSec;
-    return CacheAgeSec() < max_age;
+    const int interval_min = CacheCompareIntervalMin(local_tm.tm_hour * 60 + local_tm.tm_min);
+    if (interval_min <= 0) return false;
+    // Older than the interval is expired. An age equal to the interval is still valid.
+    return CacheAgeSec() <= static_cast<int64_t>(interval_min) * 60;
 }
 
 int64_t QWeatherClient::CacheAgeSec() const {
@@ -130,6 +131,15 @@ bool QWeatherClient::RequestFetch(bool force) {
     if (!IsClockValid()) {
         ESP_LOGI(kTag, "Clock not synced yet, fetch deferred until SNTP");
         return false;
+    }
+    if (!force) {
+        const time_t now = time(nullptr);
+        struct tm local_tm = {};
+        localtime_r(&now, &local_tm);
+        if (RefreshMinAt(local_tm.tm_hour * 60 + local_tm.tm_min) <= 0) {
+            ESP_LOGI(kTag, "Current refresh interval is off, skipping fetch");
+            return false;
+        }
     }
     if (!force && IsCacheFresh()) {
         ESP_LOGI(kTag, "Cache still fresh, skipping fetch");

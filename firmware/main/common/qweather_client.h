@@ -21,7 +21,6 @@
 namespace ink {
 
 constexpr const char* kDefaultCity = "杭州";
-constexpr int kWeatherCacheMaxAgeSec = 30 * 60;
 
 /** Called from the fetch task when a fetch finishes. */
 using WeatherFetchCallback = std::function<void(bool ok, const WeatherData& data)>;
@@ -37,18 +36,24 @@ public:
     static bool IsClockValid();
 
     bool LoadCache(WeatherData* out);
-    /** @brief Fresher than the day/night refresh interval now in effect (30 min when off) */
+    /**
+     * @brief True when the cached forecast is still inside the day/night interval
+     *
+     * Age is measured from fetched_at. The comparison interval is the current
+     * day or night setting, or the other one when the current setting is off.
+     * Both off, a missing cache, or an unsynced clock count as not fresh.
+     */
     bool IsCacheFresh() const;
     /** @brief Seconds since the cached data was fetched; huge when unknown */
     int64_t CacheAgeSec() const;
 
     /**
      * @brief Start a background fetch
-     * @param force Fetch even if the cached result is still fresh or the
-     *        client is backing off after an auth/rate-limit error
+     * @param force Fetch even if the current interval is off, the cache is
+     *        still fresh, or the client is backing off after an auth/rate-limit error
      * @return true if a fetch task was started; false without keys, before
-     *         the clock is synced, while fetching, when the cache is fresh,
-     *         or while backing off
+     *         the clock is synced, while fetching, when the interval is off,
+     *         when the cache is fresh, or while backing off
      */
     bool RequestFetch(bool force);
     bool IsFetching() const;

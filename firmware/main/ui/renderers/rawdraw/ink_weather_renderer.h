@@ -26,6 +26,8 @@ public:
     bool HandleInput(const ButtonEvent& event) override;
 
     void SetData(const ink::WeatherData& data);
+    /** @brief Drop the on-screen forecast so the page shows "暂无天气数据". NVS is untouched. */
+    void ClearDisplayedData();
     bool HasData() const;
     void SetLoading(bool loading);
     void SetFailed(bool failed);

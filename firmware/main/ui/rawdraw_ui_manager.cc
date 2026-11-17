@@ -372,6 +372,7 @@ void RawDrawUiManager::Init(CustomLcdDisplay* lcd, RefreshCallback refresh_cb) {
         if (refresh_idle_listener_) {
             refresh_idle_listener_();
         }
+        PumpSettingsNavQueue();
     });
 
     {
@@ -737,12 +738,66 @@ void RawDrawUiManager::StopLanHttpServer() {
 // Input handling
 // ============================================================
 
+bool RawDrawUiManager::IsSettingsNavQueueClick(const rawdraw::ButtonEvent& event) const {
+    return current_page_ == RawDrawPageId::Settings && !quick_switch_open_ &&
+           (event.type == rawdraw::ButtonEvent::kUpClick ||
+            event.type == rawdraw::ButtonEvent::kDownClick);
+}
+
+void RawDrawUiManager::PumpSettingsNavQueue() {
+    rawdraw::ButtonEvent event{};
+    {
+        std::lock_guard<std::mutex> lock(ui_state_mutex_);
+        if (current_page_ != RawDrawPageId::Settings || quick_switch_open_) {
+            settings_nav_q_head_ = 0;
+            settings_nav_q_count_ = 0;
+            settings_nav_busy_ = false;
+            return;
+        }
+        if (!settings_nav_busy_) {
+            return;
+        }
+        if (settings_nav_q_count_ == 0) {
+            settings_nav_busy_ = false;
+            return;
+        }
+        event = settings_nav_queue_[settings_nav_q_head_];
+        settings_nav_q_head_ = (settings_nav_q_head_ + 1) % kSettingsNavQueueCap;
+        settings_nav_q_count_--;
+    }
+    settings_nav_dispatching_.store(true, std::memory_order_release);
+    HandleInput(event);
+    settings_nav_dispatching_.store(false, std::memory_order_release);
+}
+
 bool RawDrawUiManager::HandleInput(const rawdraw::ButtonEvent& event) {
     if (sleep_teardown_.load(std::memory_order_acquire)) {
         return true;
     }
     const bool navigation_click = IsNavigationClick(event);
-    if (navigation_click && input_refresh_locked_.load(std::memory_order_acquire)) {
+    const bool settings_nav = IsSettingsNavQueueClick(event);
+    const bool replaying = settings_nav_dispatching_.load(std::memory_order_acquire);
+    if (settings_nav && !replaying) {
+        bool defer = false;
+        {
+            std::lock_guard<std::mutex> lock(ui_state_mutex_);
+            if (settings_nav_busy_ || input_refresh_locked_.load(std::memory_order_acquire)) {
+                defer = true;
+                settings_nav_busy_ = true;
+                if (settings_nav_q_count_ < kSettingsNavQueueCap) {
+                    const int tail = (settings_nav_q_head_ + settings_nav_q_count_) % kSettingsNavQueueCap;
+                    settings_nav_queue_[tail] = event;
+                    settings_nav_q_count_++;
+                }
+            } else {
+                settings_nav_busy_ = true;
+            }
+        }
+        if (defer) {
+            return true;
+        }
+    } else if (navigation_click && !settings_nav &&
+               input_refresh_locked_.load(std::memory_order_acquire)) {
         ESP_LOGI(kTag, "Navigation click ignored until current refresh completes: type=%d", event.type);
         return true;
     }
@@ -855,6 +910,10 @@ bool RawDrawUiManager::HandleInput(const rawdraw::ButtonEvent& event) {
 
     auto* renderer = GetActiveRenderer();
     if (!renderer) {
+        if (settings_nav && !replaying) {
+            std::lock_guard<std::mutex> lock(ui_state_mutex_);
+            settings_nav_busy_ = false;
+        }
         return false;
     }
 
@@ -880,6 +939,11 @@ bool RawDrawUiManager::HandleInput(const rawdraw::ButtonEvent& event) {
             if (!TryDisplayCurrentPhotoRaw4Color()) {
                 TriggerRefresh(false);
             }
+        }
+    } else if (settings_nav) {
+        std::lock_guard<std::mutex> lock(ui_state_mutex_);
+        if (settings_nav_q_count_ == 0) {
+            settings_nav_busy_ = false;
         }
     }
 
@@ -1269,17 +1333,24 @@ rawdraw::Rect RawDrawUiManager::GetQuickSwitchBounds() const {
     return {(width_ - overlay_w) / 2, Style::kStatusBarHeight + 26, overlay_w, overlay_h};
 }
 
+namespace {
+
+size_t Framebuffer2bppBytes(int width, int height) {
+    if (width <= 0 || height <= 0) return 0;
+    return static_cast<size_t>((width * 2 + 7) / 8) * static_cast<size_t>(height);
+}
+
+}  // namespace
+
 void RawDrawUiManager::SnapshotQuickSwitchBacking(uint8_t* fb) {
     if (!fb || width_ <= 0 || height_ <= 0) return;
-    const size_t bytes_per_row = static_cast<size_t>((width_ + 7) / 8);
-    const size_t frame_bytes = bytes_per_row * static_cast<size_t>(height_);
+    const size_t frame_bytes = Framebuffer2bppBytes(width_, height_);
     quick_switch_backing_.assign(fb, fb + frame_bytes);
 }
 
 void RawDrawUiManager::RestoreQuickSwitchBacking(uint8_t* fb) {
     if (!fb || quick_switch_backing_.empty()) return;
-    const size_t bytes_per_row = static_cast<size_t>((width_ + 7) / 8);
-    const size_t frame_bytes = bytes_per_row * static_cast<size_t>(height_);
+    const size_t frame_bytes = Framebuffer2bppBytes(width_, height_);
     if (quick_switch_backing_.size() != frame_bytes) return;
     memcpy(fb, quick_switch_backing_.data(), frame_bytes);
     quick_switch_backing_.clear();

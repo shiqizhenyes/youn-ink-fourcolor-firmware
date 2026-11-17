@@ -89,6 +89,13 @@ private:
     bool woke_for_broadcast_ = false;
     bool woke_for_refresh_ = false;                // timer wake for the day/night weather refresh
     bool woke_for_calendar_ = false;               // timer wake to redraw the calendar page
+    bool defer_wake_refresh_ = false;              // button wake: paint only after Wi-Fi or its timeout
+    bool refresh_link_resolved_ = false;           // scheduled refresh already chose cache or a fetch
+    bool refresh_wait_clock_ = false;              // scheduled refresh is online but waiting for the clock
+    bool weather_wait_clock_ = false;              // button wake on the weather page is waiting for the clock
+    bool broadcast_wait_link_ = false;             // announcement is due and still waiting for Wi-Fi or the clock
+    bool wake_refresh_cancelled_ = false;          // user left the deferred wake; don't paint again on connect
+    std::atomic<bool> wake_resolve_busy_{false};
     int last_refresh_check_minute_ = -1;
     int64_t broadcast_started_us_ = 0;
     int64_t resleep_ready_us_ = 0;
@@ -103,6 +110,14 @@ private:
     void CheckDailyBroadcast();
     void TriggerDailyBroadcast(int today);
     void FinishBroadcast();
+    void CheckWakeLink();
+    bool WakeLinkUp() const;
+    void ResolveButtonWake(bool connected);
+    void ResolveRefreshWake(bool connected);
+    /** @brief Paint a fresh cache, or the existing empty-state text. Returns false while the clock is invalid. */
+    bool PresentCachedWeather(bool request_refresh);
+    void DecideBroadcast(bool connected);
+    void TryFinishBroadcastLink();
     /**
      * @brief Arm the ESP32 RC timer for the next wall-clock wake
      * @param programmed_s if non-null, receives the RC-timer seconds actually programmed

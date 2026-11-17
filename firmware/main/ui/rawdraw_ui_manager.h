@@ -499,6 +499,12 @@ private:
     std::atomic<bool> active_page_refresh_pending_{false};
     std::atomic<bool> gallery_slideshow_pending_{false};
     std::atomic<bool> input_refresh_locked_{false};
+    static constexpr int kSettingsNavQueueCap = 8;
+    rawdraw::ButtonEvent settings_nav_queue_[kSettingsNavQueueCap] = {};
+    int settings_nav_q_head_ = 0;
+    int settings_nav_q_count_ = 0;
+    bool settings_nav_busy_ = false;
+    std::atomic<bool> settings_nav_dispatching_{false};
     std::atomic<bool> sleep_teardown_{false};
     int last_clock_minute_key_ = -1;
     int gallery_slideshow_interval_minutes_ = 0;
@@ -531,6 +537,8 @@ private:
     void DrawGlobalPageFrame(uint8_t* fb, int width, int height);
     void DrawQuickSwitchOverlay(uint8_t* fb, int width, int height);
     bool HandleQuickSwitchInput(const rawdraw::ButtonEvent& event);
+    bool IsSettingsNavQueueClick(const rawdraw::ButtonEvent& event) const;
+    void PumpSettingsNavQueue();
     rawdraw::Rect GetQuickSwitchBounds() const;
     void SnapshotQuickSwitchBacking(uint8_t* fb);
     void RestoreQuickSwitchBacking(uint8_t* fb);

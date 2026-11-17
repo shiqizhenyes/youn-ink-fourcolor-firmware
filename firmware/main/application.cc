@@ -57,8 +57,8 @@ constexpr int kBroadcastWaitAwakeMin = 10;
 constexpr int64_t kBroadcastFallbackUs = 90LL * 1000 * 1000;
 constexpr int64_t kWakeDecisionTimeoutUs = 45LL * 1000 * 1000;
 constexpr int64_t kResleepGraceUs = 5LL * 1000 * 1000;
-// Scheduled weather refresh after a timer wake: give up on Wi-Fi/fetch after this.
-constexpr int64_t kRefreshWakeTimeoutUs = 90LL * 1000 * 1000;
+// Button and timer wakes wait this long for Wi-Fi, then paint or speak from cache.
+constexpr int64_t kWakeConnectTimeoutUs = 20LL * 1000 * 1000;
 
 enum TimerWakeReason : int {
     kTimerWakeNone = 0,
@@ -213,8 +213,10 @@ void Application::Initialize() {
         rawdraw_ui_manager_->SetInitialPage(static_cast<ui::RawDrawPageId>(s_sleep_page));
     }
     s_sleep_page = -1;
-    // A weather refresh wake redraws once the new data lands; a broadcast wake only speaks.
-    rawdraw_ui_manager_->SetSkipInitialRefresh(woke_for_refresh_ || woke_for_broadcast_);
+    const bool button_wake = from_deep_sleep && !timer_wake;
+    defer_wake_refresh_ = button_wake;
+    // Keep the previous e-paper image until Wi-Fi connects or the connect wait ends.
+    rawdraw_ui_manager_->SetSkipInitialRefresh(woke_for_refresh_ || woke_for_broadcast_ || button_wake);
     rawdraw::ApTransferServer::SetActivityCallback([this]() { MarkUserActivity(); });
     rawdraw_ui_manager_->Init(lcd, [lcd](const rawdraw::Rect&, bool urgent) {
         if (urgent) {
@@ -364,12 +366,9 @@ void Application::Initialize() {
         ESP_LOGI(kTag, "Timer wake to redraw the calendar; staying offline");
         resleep_pending_.store(true);
     }
-    if (from_deep_sleep && !timer_wake) {
-        ESP_LOGI(kTag, "Wake from deep sleep: flash activity LED and refresh UI");
+    if (button_wake) {
+        ESP_LOGI(kTag, "Wake from deep sleep: connect Wi-Fi before refreshing");
         board.FlashActivityLed();
-        if (rawdraw_ui_manager_) {
-            rawdraw_ui_manager_->RequestActivePageRefresh();
-        }
     }
 
     // Set up WiFi status callback to update StatusBar
@@ -398,8 +397,31 @@ void Application::Initialize() {
                     ESP_LOGI(kTag, "WiFi connected while config page is visible, returning to gallery");
                     rawdraw_ui_manager_->SwitchPage(ui::RawDrawPageId::Gallery);
                 }
-                UpdateStatusBarForUi();
-                StartWeatherFetch(broadcast_pending_.load() || woke_for_refresh_);
+                if (defer_wake_refresh_ || (woke_for_refresh_ && !refresh_link_resolved_) ||
+                    broadcast_wait_link_ || woke_for_broadcast_) {
+                    // The main loop decides whether to paint once the link is up.
+                    UpdateStatusBarForUi(false);
+                } else if (wake_refresh_cancelled_) {
+                    // SwitchPage already painted the page the user opened.
+                    wake_refresh_cancelled_ = false;
+                    UpdateStatusBarForUi(false);
+                    StartWeatherFetch(false);
+                } else {
+                    const bool weather_page = rawdraw_ui_manager_ &&
+                        rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::Weather;
+                    if (weather_page && ink::QWeatherClient::IsClockValid()) {
+                        const time_t now = time(nullptr);
+                        struct tm local_tm = {};
+                        localtime_r(&now, &local_tm);
+                        const bool interval_off =
+                            ink::RefreshMinAt(local_tm.tm_hour * 60 + local_tm.tm_min) <= 0;
+                        if (interval_off || ink::QWeatherClient::GetInstance().IsCacheFresh()) {
+                            PresentCachedWeather(false);
+                        }
+                    }
+                    const bool fetch_started = StartWeatherFetch(false);
+                    UpdateStatusBarForUi(!(fetch_started && weather_page));
+                }
                 break;
             case NetworkEvent::Disconnected:
                 ESP_LOGI(kTag, "WiFi disconnected");
@@ -495,6 +517,8 @@ void Application::SetupInkWeather() {
         if (ok) {
             wr->SetData(data);
         } else {
+            // Drop the stale forecast so the failure text is what gets painted.
+            wr->ClearDisplayedData();
             wr->SetFailed(true);
         }
         if (rawdraw_ui_manager_ &&
@@ -518,6 +542,12 @@ void Application::SetupInkWeather() {
         StartWeatherFetch(true);
     });
     rawdraw_ui_manager_->SetPageSwitchCallback([this](ui::RawDrawPageId page) {
+        if (defer_wake_refresh_) {
+            ESP_LOGI(kTag, "Page changed during wake; cancelling the deferred refresh");
+            defer_wake_refresh_ = false;
+            weather_wait_clock_ = false;
+            wake_refresh_cancelled_ = true;
+        }
         OnWeatherPageSwitched(page == ui::RawDrawPageId::Weather);
     });
 }
@@ -560,7 +590,12 @@ bool Application::StartWeatherFetch(bool force) {
 
 void Application::OnSntpSynced() {
     sntp_synced_.store(true);
-    StartWeatherFetch(broadcast_pending_.load() || woke_for_refresh_);
+    // Wake decisions run on the main loop so they are not raced by this callback.
+    if (defer_wake_refresh_ || refresh_wait_clock_ || broadcast_wait_link_ ||
+        (woke_for_refresh_ && !refresh_link_resolved_)) {
+        return;
+    }
+    StartWeatherFetch(false);
 }
 
 void Application::OnWeatherPageSwitched(bool entered) {
@@ -572,6 +607,18 @@ void Application::OnWeatherPageSwitched(bool entered) {
         return;
     }
     const bool started = StartWeatherFetch(false);
+    auto& client = ink::QWeatherClient::GetInstance();
+    if (!started && !client.IsFetching() && ink::QWeatherClient::IsClockValid()) {
+        const time_t now = time(nullptr);
+        struct tm local_tm = {};
+        localtime_r(&now, &local_tm);
+        const bool interval_off = ink::RefreshMinAt(local_tm.tm_hour * 60 + local_tm.tm_min) <= 0;
+        // SwitchPage renders after this callback. Drop an expired forecast when
+        // this period does not fetch; keep a fresh cache on screen.
+        if (interval_off || client.IsCacheFresh()) {
+            PresentCachedWeather(false);
+        }
+    }
     if (!ink::GetAutoSpeak()) return;
     auto* wr = rawdraw_ui_manager_ ? rawdraw_ui_manager_->GetInkWeatherRenderer() : nullptr;
     const bool has_data = wr && wr->HasData();
@@ -589,19 +636,27 @@ void Application::OnWeatherFetched(bool ok, const ink::WeatherData& data) {
     if (woke_for_refresh_) {
         ESP_LOGI(kTag, "Scheduled weather refresh after timer wake: %s", ok ? "ok" : "failed");
         woke_for_refresh_ = false;
+        refresh_link_resolved_ = true;
         if (rawdraw_ui_manager_ && !on_page) rawdraw_ui_manager_->RequestActivePageRefresh();
         resleep_pending_.store(true);
     }
-    const bool page_speak = speak_after_fetch_.exchange(false) && on_page;
     const bool broadcast = broadcast_pending_.exchange(false);
-    if (!page_speak && !broadcast) return;
+    if (broadcast) {
+        if (ok) {
+            ESP_LOGI(kTag, "Daily weather announcement: fresh data");
+            if (rawdraw_ui_manager_ && !on_page) rawdraw_ui_manager_->RequestActivePageRefresh();
+            SpeakWeather(data);
+        } else {
+            ESP_LOGW(kTag, "Daily weather announcement: fetch failed, not speaking stale cache");
+        }
+        FinishBroadcast();
+        return;
+    }
+    const bool page_speak = speak_after_fetch_.exchange(false) && on_page;
+    if (!page_speak) return;
 
     const bool spoken = ok ? SpeakWeather(data) : SpeakCachedWeather();
-    page_speech_.store(spoken && page_speak && !broadcast);
-    if (broadcast) {
-        ESP_LOGI(kTag, "Daily weather announcement: %s", ok ? "fresh data" : "fetch failed, cached data");
-        FinishBroadcast();
-    }
+    page_speech_.store(spoken);
 }
 
 bool Application::SpeakWeather(const ink::WeatherData& data) {
@@ -627,14 +682,19 @@ void Application::CheckDailyBroadcast() {
     if (broadcast_pending_.load() && now_us - broadcast_started_us_ > kBroadcastFallbackUs &&
         !ink::QWeatherClient::GetInstance().IsFetching()) {
         broadcast_pending_.store(false);
-        ESP_LOGW(kTag, "Daily weather announcement: no fresh data in time, using cache");
-        page_speech_.store(false);
-        SpeakCachedWeather();
+        if (ink::QWeatherClient::GetInstance().IsCacheFresh()) {
+            ESP_LOGW(kTag, "Daily weather announcement: fetch did not finish, speaking fresh cache");
+            page_speech_.store(false);
+            SpeakCachedWeather();
+        } else {
+            ESP_LOGW(kTag, "Daily weather announcement: fetch did not finish, not speaking stale cache");
+        }
         FinishBroadcast();
     }
 
     if (user_active_.load() &&
-        (woke_for_broadcast_ || woke_for_refresh_ || woke_for_calendar_ || resleep_pending_.load())) {
+        (woke_for_broadcast_ || (woke_for_refresh_ && refresh_link_resolved_) ||
+         woke_for_calendar_ || resleep_pending_.load())) {
         ESP_LOGI(kTag, "Button pressed after timer wake; staying awake");
         woke_for_broadcast_ = false;
         woke_for_refresh_ = false;
@@ -643,12 +703,6 @@ void Application::CheckDailyBroadcast() {
             woke_for_calendar_ = false;
             Board::GetInstance().RequestNetwork();
         }
-    }
-    if (woke_for_refresh_ && now_us > kRefreshWakeTimeoutUs &&
-        !ink::QWeatherClient::GetInstance().IsFetching()) {
-        ESP_LOGW(kTag, "Scheduled weather refresh: no data in time; back to sleep");
-        woke_for_refresh_ = false;
-        resleep_pending_.store(true);
     }
     if (resleep_pending_.load()) {
         const bool busy = ink::WeatherSpeaker::GetInstance().IsSpeaking() || !audio_service_.IsIdle() ||
@@ -699,27 +753,195 @@ void Application::TriggerDailyBroadcast(int today) {
     ESP_LOGI(kTag, "Daily weather announcement due (%d)", today);
     ink::SetLastBroadcastDate(today);
     speak_after_fetch_.store(false);
-    broadcast_pending_.store(true);
-    broadcast_started_us_ = esp_timer_get_time();
-    if (StartWeatherFetch(true) || ink::QWeatherClient::GetInstance().IsFetching()) return;
-
-    const bool online = wifi_connected_.load(std::memory_order_acquire) ||
-                        WifiManager::GetInstance().IsConnected();
-    if (online || !ink::QWeatherClient::GetInstance().HasKeys()) {
-        // Nothing fresh is coming (e.g. backing off after an API error).
-        broadcast_pending_.store(false);
-        page_speech_.store(false);
-        SpeakCachedWeather();
-        FinishBroadcast();
-    }
-    // Otherwise the Wi-Fi Connected handler starts a forced fetch.
+    page_speech_.store(false);
+    broadcast_wait_link_ = true;
+    TryFinishBroadcastLink();
 }
 
 void Application::FinishBroadcast() {
+    broadcast_wait_link_ = false;
     if (woke_for_broadcast_) {
         woke_for_broadcast_ = false;
         resleep_pending_.store(true);
     }
+}
+
+bool Application::WakeLinkUp() const {
+    return wifi_connected_.load(std::memory_order_acquire) || WifiManager::GetInstance().IsConnected();
+}
+
+bool Application::PresentCachedWeather(bool request_refresh) {
+    auto* wr = rawdraw_ui_manager_ ? rawdraw_ui_manager_->GetInkWeatherRenderer() : nullptr;
+    if (!wr) return true;
+    if (!ink::QWeatherClient::IsClockValid()) return false;
+
+    auto& client = ink::QWeatherClient::GetInstance();
+    if (client.IsCacheFresh()) {
+        ink::WeatherData cached;
+        if (client.LoadCache(&cached)) {
+            wr->SetData(cached);
+        } else {
+            wr->ClearDisplayedData();
+        }
+    } else {
+        wr->ClearDisplayedData();
+    }
+    if (request_refresh && rawdraw_ui_manager_) {
+        rawdraw_ui_manager_->RequestActivePageRefresh();
+    }
+    return true;
+}
+
+void Application::ResolveButtonWake(bool connected) {
+    if (!defer_wake_refresh_) return;
+    if (!rawdraw_ui_manager_) {
+        defer_wake_refresh_ = false;
+        weather_wait_clock_ = false;
+        return;
+    }
+    if (rawdraw_ui_manager_->GetCurrentPage() != ui::RawDrawPageId::Weather) {
+        defer_wake_refresh_ = false;
+        weather_wait_clock_ = false;
+        UpdateStatusBarForUi(true);
+        return;
+    }
+    if (!ink::QWeatherClient::IsClockValid()) {
+        weather_wait_clock_ = true;
+        return;
+    }
+
+    weather_wait_clock_ = false;
+    defer_wake_refresh_ = false;
+    auto& client = ink::QWeatherClient::GetInstance();
+    if (client.IsFetching()) return;
+    const time_t now = time(nullptr);
+    struct tm local_tm = {};
+    localtime_r(&now, &local_tm);
+    const bool interval_off = ink::RefreshMinAt(local_tm.tm_hour * 60 + local_tm.tm_min) <= 0;
+    const bool fresh = client.IsCacheFresh();
+    if (!connected || fresh || interval_off) {
+        UpdateStatusBarForUi(false);
+        PresentCachedWeather(true);
+        return;
+    }
+    if (StartWeatherFetch(false) || client.IsFetching()) return;
+
+    if (!client.HasKeys()) {
+        UpdateStatusBarForUi(false);
+        PresentCachedWeather(true);
+        return;
+    }
+    auto* wr = rawdraw_ui_manager_->GetInkWeatherRenderer();
+    if (wr) wr->SetFailed(true);
+    UpdateStatusBarForUi(false);
+    rawdraw_ui_manager_->RequestActivePageRefresh();
+}
+
+void Application::ResolveRefreshWake(bool connected) {
+    if (refresh_link_resolved_) return;
+    if (!ink::QWeatherClient::IsClockValid()) {
+        refresh_wait_clock_ = true;
+        return;
+    }
+
+    refresh_wait_clock_ = false;
+    refresh_link_resolved_ = true;
+    auto& client = ink::QWeatherClient::GetInstance();
+    if (client.IsFetching()) return;
+    const time_t now = time(nullptr);
+    struct tm local_tm = {};
+    localtime_r(&now, &local_tm);
+    const bool interval_off = ink::RefreshMinAt(local_tm.tm_hour * 60 + local_tm.tm_min) <= 0;
+    const bool fresh = client.IsCacheFresh();
+    if (!connected || fresh || interval_off) {
+        UpdateStatusBarForUi(false);
+        PresentCachedWeather(true);
+        woke_for_refresh_ = false;
+        resleep_pending_.store(true);
+        return;
+    }
+    if (StartWeatherFetch(false) || client.IsFetching()) return;
+
+    if (!client.HasKeys()) {
+        UpdateStatusBarForUi(false);
+        PresentCachedWeather(true);
+    } else {
+        auto* wr = rawdraw_ui_manager_ ? rawdraw_ui_manager_->GetInkWeatherRenderer() : nullptr;
+        if (wr) wr->SetFailed(true);
+        UpdateStatusBarForUi(false);
+        if (rawdraw_ui_manager_) rawdraw_ui_manager_->RequestActivePageRefresh();
+    }
+    woke_for_refresh_ = false;
+    resleep_pending_.store(true);
+}
+
+void Application::DecideBroadcast(bool connected) {
+    if (!ink::QWeatherClient::IsClockValid()) {
+        broadcast_wait_link_ = true;
+        return;
+    }
+    broadcast_wait_link_ = false;
+    auto& client = ink::QWeatherClient::GetInstance();
+    if (client.IsFetching()) {
+        broadcast_pending_.store(true);
+        broadcast_started_us_ = esp_timer_get_time();
+        return;
+    }
+    if (client.IsCacheFresh()) {
+        ESP_LOGI(kTag, "Daily weather announcement: cache still fresh");
+        SpeakCachedWeather();
+        FinishBroadcast();
+        return;
+    }
+    if (!connected) {
+        ESP_LOGW(kTag, "Daily weather announcement: offline and cache expired");
+        if (rawdraw_ui_manager_ &&
+            rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::Weather) {
+            UpdateStatusBarForUi(false);
+            PresentCachedWeather(true);
+        }
+        FinishBroadcast();
+        return;
+    }
+
+    broadcast_pending_.store(true);
+    broadcast_started_us_ = esp_timer_get_time();
+    if (StartWeatherFetch(true)) return;
+
+    broadcast_pending_.store(false);
+    ESP_LOGW(kTag, "Daily weather announcement: fetch did not start");
+    if (rawdraw_ui_manager_ &&
+        rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::Weather) {
+        auto* wr = rawdraw_ui_manager_->GetInkWeatherRenderer();
+        if (wr && client.HasKeys()) wr->SetFailed(true);
+        rawdraw_ui_manager_->RequestActivePageRefresh();
+    }
+    FinishBroadcast();
+}
+
+void Application::TryFinishBroadcastLink() {
+    if (!broadcast_wait_link_) return;
+    if (!ink::QWeatherClient::IsClockValid()) return;
+    const bool connected = WakeLinkUp();
+    if (!connected && esp_timer_get_time() < kWakeConnectTimeoutUs) return;
+    DecideBroadcast(connected);
+}
+
+void Application::CheckWakeLink() {
+    bool idle = false;
+    if (!wake_resolve_busy_.compare_exchange_strong(idle, true, std::memory_order_acq_rel)) {
+        return;
+    }
+    const bool connected = WakeLinkUp();
+    const bool timed_out = esp_timer_get_time() >= kWakeConnectTimeoutUs;
+    if (defer_wake_refresh_ && (connected || timed_out)) {
+        ResolveButtonWake(connected);
+    }
+    if (woke_for_refresh_ && !refresh_link_resolved_ && (connected || timed_out)) {
+        ResolveRefreshWake(connected);
+    }
+    TryFinishBroadcastLink();
+    wake_resolve_busy_.store(false, std::memory_order_release);
 }
 
 uint32_t Application::ArmTimerWakeup(uint32_t* programmed_s) {
@@ -1134,6 +1356,7 @@ void Application::Run() {
         if (rawdraw_ui_manager_) {
             rawdraw_ui_manager_->PumpClockRefresh();
         }
+        CheckWakeLink();
         CheckDailyBroadcast();
         CheckWeatherRefresh();
         CheckIdleSleep();
@@ -1202,6 +1425,7 @@ void Application::UpdateStatusBarForUi(bool request_panel_refresh) {
         // Sleep teardown must not queue a new ~20s four-color refresh before PowerEpdOff.
         if (request_panel_refresh &&
             !rawdraw_ui_manager_->IsSleepTeardown() &&
+            !defer_wake_refresh_ &&
             !woke_for_refresh_ && !woke_for_broadcast_ && !resleep_pending_.load()) {
             rawdraw_ui_manager_->RequestActivePageRefresh();
         }

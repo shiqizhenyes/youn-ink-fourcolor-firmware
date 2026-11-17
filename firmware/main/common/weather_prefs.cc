@@ -159,6 +159,14 @@ int RefreshMinAt(int minute_of_day) {
     return day ? GetDayRefreshMin() : GetNightRefreshMin();
 }
 
+int CacheCompareIntervalMin(int minute_of_day) {
+    const bool day = minute_of_day >= kDayStartMinute && minute_of_day < kDayEndMinute;
+    const int current = day ? GetDayRefreshMin() : GetNightRefreshMin();
+    if (current > 0) return current;
+    const int other = day ? GetNightRefreshMin() : GetDayRefreshMin();
+    return other > 0 ? other : 0;
+}
+
 namespace {
 
 int SecondsUntilNextOnWindow(int now_sec, int day_min, int night_min) {
