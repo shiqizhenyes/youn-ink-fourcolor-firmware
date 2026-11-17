@@ -24,6 +24,7 @@ extern const lv_font_t weather_icons_48;
 #define FA_WEATHER_THUNDER    "\xef\x83\x83"  // U+F0C3 ⛈️ Cloud with lightning
 #define FA_WEATHER_RAIN       "\xef\x83\xa9"  // U+F0E9 ☂️ Umbrella (rain)
 #define FA_WEATHER_SUN        "\xef\x86\x85"  // U+F185 ☀️ Sun
+#define FA_WEATHER_MOON       "\xef\x86\x86"  // U+F186 solid moon
 #define FA_WEATHER_SNOW       "\xef\x8b\x9c"  // U+F2DC ❄️ Snowflake-o
 
 #ifdef __cplusplus

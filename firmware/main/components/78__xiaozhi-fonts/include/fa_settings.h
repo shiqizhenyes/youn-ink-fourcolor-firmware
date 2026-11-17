@@ -35,8 +35,9 @@ extern const lv_font_t fa_settings_16;
 #define FA_SETTINGS_TRASH       "\xef\x80\x94"  // U+F014 🗑️ Trash
 #define FA_SETTINGS_CALENDAR    "\xef\x81\xb3"  // U+F073 📅 Calendar (日期格式)
 #define FA_SETTINGS_COMMENT     "\xef\x81\xb5"  // U+F075 💬 Comment (AI对话长度)
-#define FA_SETTINGS_LINK        "\xef\x8c\x81"  // U+F0C1 🔗 Link (服务地址)
+#define FA_SETTINGS_LINK        "\xef\x83\x81"  // U+F0C1 Link (局域网IP)
 #define FA_SETTINGS_CLOCK       "\xef\x80\x97"  // U+F017 🕐 Clock (时钟显示)
+#define FA_SETTINGS_BELL        "\xef\x83\xb3"  // U+F0F3 🔔 Bell (播报时间)
 #define FA_SETTINGS_MAP_MARKER  "\xef\x81\x81"  // U+F041 📍 Map-marker (服务地址)
 #define FA_SETTINGS_BLUETOOTH   "\xef\x8a\x93"  // U+F293 Bluetooth-b
 

@@ -142,14 +142,34 @@ void ClearDialogRegionRounded(uint8_t* fb, int width, int height,
 
 [[maybe_unused]] void DrawSettingsVectorIcon(uint8_t* fb, int width, const std::string& label,
                                              int x, int center_y, Color color) {
-    // FontAwesome 16px icons from fa_settings_16 font
-    // Map label to FA Unicode character
+    // FontAwesome 16px icons. Album and weather match the quick-switch popup.
+    const lv_font_t* icon_font = &fa_settings_16;
     const char* icon_char = nullptr;
     
     if (label == "系统") {
         icon_char = "\xef\x80\x93";  // U+F013 gear
+    } else if (label == "相册") {
+        icon_char = "\xef\x80\xbe";  // U+F03E image, same as FA_SETTINGS_IMAGE
+    } else if (label == "天气" || label == "白天更新") {
+        icon_char = "\xef\x86\x85";  // U+F185 sun
+        icon_font = &weather_icons_16;
+    } else if (label == "夜间更新") {
+        icon_char = "\xef\x86\x86";  // U+F186 solid moon
+        icon_font = &weather_icons_16;
+    } else if (label == "轮播间隔") {
+        icon_char = "\xef\x80\x97";  // U+F017 clock
+    } else if (label == "播报时间") {
+        icon_char = "\xef\x83\xb3";  // U+F0F3 bell
+    } else if (label == "自动播报") {
+        icon_char = "\xef\x80\xa8";  // U+F028 volume
     } else if (label == "网络" || label == "Wi-Fi") {
         icon_char = "\xef\x87\xab";  // U+F1EB wifi
+    } else if (label == "局域网服务") {
+        icon_char = "\xef\x88\xb3";  // U+F233 server
+    } else if (label == "局域网IP") {
+        icon_char = "\xef\x83\x81";  // U+F0C1 link, present in fa_settings_16
+    } else if (label == "省电模式") {
+        icon_char = "\xef\x80\x91";  // U+F011 power
     } else if (label == "功能" || label == "语音唤醒") {
         icon_char = "\xef\x82\xad";  // U+F0AD wrench
     } else if (label == "时钟显示") {
@@ -184,8 +204,8 @@ void ClearDialogRegionRounded(uint8_t* fb, int width, int height,
     
     // Use ink-box centering (baseline math) for icon positioning
     // Same as text - icon glyphs have box_h/ofs_y that differ from line_height
-    const int top_y = InkCenteredTextTopY(&fa_settings_16, icon_char, center_y, 0);
-    DrawText(fb, width, x, top_y, icon_char, &fa_settings_16, color);
+    const int top_y = InkCenteredTextTopY(icon_font, icon_char, center_y, 0);
+    DrawText(fb, width, x, top_y, icon_char, icon_font, color);
 }
 
 void DrawDebugDashedHLine(uint8_t* fb, int width, int y, int x1, int x2, Color color) {
@@ -1124,19 +1144,25 @@ void SettingsRenderer::UpdateSlider(int index, int value) {
     }
 }
 
-bool SettingsRenderer::AdjustSelectedSlider(int delta) {
+bool SettingsRenderer::SelectedIsSlider() const {
     if (showing_about_dialog_ || showing_volume_dialog_ || showing_storage_dialog_ ||
         showing_server_dialog_ || showing_server_list_dialog_ || showing_theme_dialog_ ||
         showing_ota_dialog_) {
         return false;
     }
     if (selected_index_ < 0 || selected_index_ >= static_cast<int>(items_.size())) return false;
+    return items_[selected_index_].type == SettingsItemType::Slider;
+}
+
+bool SettingsRenderer::AdjustSelectedSlider(int delta, bool* changed) {
+    if (changed) *changed = false;
+    if (!SelectedIsSlider()) return false;
     SettingsItemDef& item = items_[selected_index_];
-    if (item.type != SettingsItemType::Slider) return false;
     const int next = std::clamp(item.slider_value + delta, 0, 100);
     if (next != item.slider_value) {
         item.slider_value = next;
         needs_full_refresh_ = true;
+        if (changed) *changed = true;
     }
     if (item.on_slider) item.on_slider(next);
     return true;

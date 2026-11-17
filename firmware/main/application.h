@@ -54,6 +54,8 @@ public:
     void OnDownClick();
     void OnUpLongPress();
     void OnDownLongPress();
+    void SetUpKeyHeld(bool held);
+    void SetDownKeyHeld(bool held);
     void OnWifiConfigComboLongPress();
     void OnBootClick();
     void OnBootDoubleClick();
@@ -76,6 +78,14 @@ private:
     std::atomic<bool> resleep_pending_{false};     // timer wake: go back to sleep once spoken
     std::atomic<bool> sntp_synced_{false};
     std::atomic<bool> user_active_{false};
+    std::atomic<bool> up_key_held_{false};
+    std::atomic<bool> down_key_held_{false};
+    std::atomic<bool> volume_repeat_active_{false};
+    std::atomic<bool> volume_repeat_cancel_{false};
+    std::atomic<int> volume_repeat_delta_{0};
+    std::atomic<bool> volume_step_defer_start_{false};
+    std::atomic<bool> volume_step_wait_refresh_{false};
+    std::atomic<int> volume_step_gates_{0};
     bool woke_for_broadcast_ = false;
     bool woke_for_refresh_ = false;                // timer wake for the day/night weather refresh
     bool woke_for_calendar_ = false;               // timer wake to redraw the calendar page
@@ -100,8 +110,15 @@ private:
      */
     uint32_t ArmTimerWakeup(uint32_t* programmed_s = nullptr);
     /** @brief Long-press UP/DOWN on a selected settings Slider; false if not applicable */
-    bool AdjustSettingsSlider(int delta);
-    void PlayVolumePreview(int volume);
+    bool AdjustSettingsSlider(int delta, bool* changed = nullptr, bool request_refresh = true);
+    void PlayVolumePreview(int volume, std::function<void()> on_done = {});
+    bool BeginVolumeRepeat(int delta);
+    void RunVolumeStep();
+    void OnVolumeRepeatRefreshIdle();
+    void OnVolumePreviewDone();
+    void NoteVolumeStepGate(int bit);
+    void TryContinueVolumeStep();
+    bool VolumeRepeatStillHeld() const;
     void CheckWeatherRefresh();
     void MarkUserActivity();
     /** @brief Deep sleep after kIdleSleepUs without input, except on pages that stay awake */

@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 16 px
  * Bpp: 1
- * Opts: --font managed_components/espressif__mqtt/docs/_build/en/esp32/html/_static/css/fonts/fontawesome-webfont.ttf --format lvgl --lv-include lvgl.h --bpp 1 --size 16 -r 0xF0C2 -r 0xF0E9 -r 0xF185 -r 0xF2DC -r 0xF0C3 --no-compress --force-fast-kern-format -o main/components/78__xiaozhi-fonts/src/weather_icons/weather_icons_16.c
+ * Opts: --font /Users/QiZhen/Projects/ThirdRepositories/youn-ink-fourcolor-firmware/firmware/managed_components/espressif__mqtt/docs/_build/en/esp32/html/_static/css/fonts/fontawesome-webfont.ttf --format lvgl --lv-include lvgl.h --bpp 1 --size 16 -r 0xF0C2 -r 0xF0E9 -r 0xF185 -r 0xF2DC -r 0xF0C3 -r 0xF186 --no-compress --force-fast-kern-format -o main/components/78__xiaozhi-fonts/src/weather_icons/weather_icons_16.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE
@@ -46,6 +46,12 @@ static LV_ATTRIBUTE_LARGE_CONST const uint8_t glyph_bitmap[] = {
     0x60, 0x6, 0x60, 0x6, 0xe0, 0x7, 0x10, 0x8,
     0x1c, 0x38, 0x1f, 0xf8, 0x1, 0x80, 0x1, 0x80,
 
+    /* U+F186 solid moon from Font Awesome 5 Free Solid */
+    0x7, 0x80, 0x7c, 0x3, 0xe0, 0x1f, 0x80, 0x7c,
+    0x3, 0xf0, 0xf, 0xc0, 0x3f, 0x0, 0xfc, 0x3,
+    0xf8, 0xf, 0xf0, 0x1f, 0xe0, 0x7f, 0xe4, 0xff,
+    0xe1, 0xff, 0x1, 0xf0,
+
     /* U+F2DC "" */
     0x2, 0x0, 0x54, 0x3, 0xe0, 0x4e, 0x4e, 0x23,
     0xb9, 0x3b, 0xeb, 0xe0, 0xe0, 0x7, 0x7, 0xd7,
@@ -64,7 +70,8 @@ static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc[] = {
     {.bitmap_index = 26, .adv_w = 238, .box_w = 14, .box_h = 14, .ofs_x = 0, .ofs_y = -1},
     {.bitmap_index = 51, .adv_w = 238, .box_w = 15, .box_h = 14, .ofs_x = 0, .ofs_y = -1},
     {.bitmap_index = 78, .adv_w = 256, .box_w = 16, .box_h = 16, .ofs_x = 0, .ofs_y = -2},
-    {.bitmap_index = 110, .adv_w = 238, .box_w = 13, .box_h = 16, .ofs_x = 1, .ofs_y = -2}
+    {.bitmap_index = 110, .adv_w = 256, .box_w = 14, .box_h = 16, .ofs_x = 1, .ofs_y = -2},
+    {.bitmap_index = 138, .adv_w = 238, .box_w = 13, .box_h = 16, .ofs_x = 1, .ofs_y = -2}
 };
 
 /*---------------------
@@ -72,7 +79,7 @@ static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc[] = {
  *--------------------*/
 
 static const uint16_t unicode_list_0[] = {
-    0x0, 0x1, 0x27, 0xc3, 0x21a
+    0x0, 0x1, 0x27, 0xc3, 0xc4, 0x21a
 };
 
 /*Collect the unicode lists and glyph_id offsets*/
@@ -80,7 +87,7 @@ static const lv_font_fmt_txt_cmap_t cmaps[] =
 {
     {
         .range_start = 61634, .range_length = 539, .glyph_id_start = 1,
-        .unicode_list = unicode_list_0, .glyph_id_ofs_list = NULL, .list_length = 5, .type = LV_FONT_FMT_TXT_CMAP_SPARSE_TINY
+        .unicode_list = unicode_list_0, .glyph_id_ofs_list = NULL, .list_length = 6, .type = LV_FONT_FMT_TXT_CMAP_SPARSE_TINY
     }
 };
 

@@ -382,6 +382,9 @@ public:
      * Use this from callbacks that may run outside LanMicApp::Run().
      */
     void RequestActivePageRefresh();
+    /** @brief Render the current page and push one urgent panel refresh. */
+    void RefreshShownPage();
+    void SetRefreshIdleListener(std::function<void()> listener);
     void SetGallerySlideshowIntervalMinutes(int minutes);
     int GetGallerySlideshowIntervalMinutes() const { return gallery_slideshow_interval_minutes_; }
     bool ShowPhotoById(const std::string& photo_id);
@@ -480,6 +483,7 @@ private:
 
     // Refresh callback (provided by CustomLcdDisplay)
     RefreshCallback refresh_cb_;
+    std::function<void()> refresh_idle_listener_;
     PageSwitchCallback page_switch_cb_;
 
     // Full refresh flag

@@ -417,6 +417,7 @@ private:
                 s_wifi_config_combo_handled.store(false);
             }
             s_up_held.store(true);
+            Application::GetInstance().SetUpKeyHeld(true);
             s_up_press_down_ms.store(NowMs());
             s_up_long_handled.store(false);
             s_up_suppress_click.store(false);
@@ -440,6 +441,7 @@ private:
         });
 
         up_button_.OnPressUp([]() {
+            Application::GetInstance().SetUpKeyHeld(false);
             const int64_t started_at = s_up_press_down_ms.exchange(-1);
             const bool was_long_press = started_at >= 0 && (NowMs() - started_at) >= kNavLongPressMs;
             if (was_long_press && !s_up_long_handled.exchange(true)) {
@@ -460,6 +462,7 @@ private:
                 s_wifi_config_combo_handled.store(false);
             }
             s_down_held.store(true);
+            Application::GetInstance().SetDownKeyHeld(true);
             s_down_press_down_ms.store(NowMs());
             s_down_long_handled.store(false);
             s_down_suppress_click.store(false);
@@ -477,6 +480,7 @@ private:
         });
 
         down_button_.OnPressUp([]() {
+            Application::GetInstance().SetDownKeyHeld(false);
             const int64_t started_at = s_down_press_down_ms.exchange(-1);
             const bool was_long_press = started_at >= 0 && (NowMs() - started_at) >= kNavLongPressMs;
             if (was_long_press && !s_down_long_handled.exchange(true)) {

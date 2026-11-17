@@ -369,7 +369,9 @@ void RawDrawUiManager::Init(CustomLcdDisplay* lcd, RefreshCallback refresh_cb) {
     refresh_cb_ = refresh_cb;
     lcd_->SetOnRefreshIdle([this]() {
         input_refresh_locked_.store(false, std::memory_order_release);
-        ESP_LOGI(kTag, "Display refresh idle; input unlocked");
+        if (refresh_idle_listener_) {
+            refresh_idle_listener_();
+        }
     });
 
     {
@@ -1343,6 +1345,15 @@ void RawDrawUiManager::RequestFullRefresh() {
 
 void RawDrawUiManager::RequestActivePageRefresh() {
     active_page_refresh_pending_.store(true, std::memory_order_release);
+}
+
+void RawDrawUiManager::RefreshShownPage() {
+    active_page_refresh_pending_.store(false, std::memory_order_release);
+    RefreshActivePage(true);
+}
+
+void RawDrawUiManager::SetRefreshIdleListener(std::function<void()> listener) {
+    refresh_idle_listener_ = std::move(listener);
 }
 
 bool RawDrawUiManager::ShowPhotoById(const std::string& photo_id) {

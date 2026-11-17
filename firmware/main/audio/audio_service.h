@@ -7,6 +7,7 @@
 #include <chrono>
 #include <mutex>
 #include <atomic>
+#include <functional>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -71,6 +72,7 @@ struct AudioTask {
     AudioTaskType type;
     std::vector<int16_t> pcm;
     uint32_t timestamp;
+    std::function<void()> on_played;
 };
 
 struct DebugStatistics {
@@ -113,7 +115,7 @@ public:
      * @brief Queue raw PCM at the codec output rate; blocks while the playback queue is full
      * @return false if output was muted (MuteOutput) or the service stopped
      */
-    bool PlayPcm(std::vector<int16_t>&& pcm);
+    bool PlayPcm(std::vector<int16_t>&& pcm, std::function<void()> on_played = {});
     void MuteOutput();
     void UnmuteOutput();
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);

@@ -264,15 +264,21 @@ void AudioService::AudioOutputTask() {
         audio_queue_cv_.notify_all();
         lock.unlock();
 
-        if (mute_local_sound_.load(std::memory_order_acquire)) {
+        const bool muted = mute_local_sound_.load(std::memory_order_acquire);
+        if (!muted) {
+            if (!codec_->output_enabled()) {
+                esp_timer_stop(audio_power_timer_);
+                esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
+                codec_->EnableOutput(true);
+            }
+            codec_->OutputData(task->pcm);
+        }
+        if (task->on_played) {
+            task->on_played();
+        }
+        if (muted) {
             continue;
         }
-        if (!codec_->output_enabled()) {
-            esp_timer_stop(audio_power_timer_);
-            esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
-            codec_->EnableOutput(true);
-        }
-        codec_->OutputData(task->pcm);
 
         /* Update the last output time */
         last_output_time_ = std::chrono::steady_clock::now();
@@ -767,8 +773,9 @@ void AudioService::PlaySound(const std::string_view& ogg, int duration_ms) {
     }
 }
 
-bool AudioService::PlayPcm(std::vector<int16_t>&& pcm) {
+bool AudioService::PlayPcm(std::vector<int16_t>&& pcm, std::function<void()> on_played) {
     if (mute_local_sound_.load(std::memory_order_acquire)) {
+        if (on_played) on_played();
         return false;
     }
     if (!codec_->output_enabled()) {
@@ -780,6 +787,7 @@ bool AudioService::PlayPcm(std::vector<int16_t>&& pcm) {
     task->type = kAudioTaskTypeDecodeToPlaybackQueue;
     task->pcm = std::move(pcm);
     task->timestamp = 0;
+    task->on_played = std::move(on_played);
 
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
     audio_queue_cv_.wait(lock, [this]() {
@@ -787,6 +795,7 @@ bool AudioService::PlayPcm(std::vector<int16_t>&& pcm) {
                mute_local_sound_.load(std::memory_order_acquire);
     });
     if (service_stopped_ || mute_local_sound_.load(std::memory_order_acquire)) {
+        if (task->on_played) task->on_played();
         return false;
     }
     audio_playback_queue_.push_back(std::move(task));

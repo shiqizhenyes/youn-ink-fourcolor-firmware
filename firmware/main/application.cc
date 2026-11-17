@@ -223,6 +223,7 @@ void Application::Initialize() {
             lcd->RequestUrgentRefresh();
         }
     });
+    rawdraw_ui_manager_->SetRefreshIdleListener([this]() { OnVolumeRepeatRefreshIdle(); });
 
     if (auto* sr = rawdraw_ui_manager_->GetSettingsRenderer()) {
         Settings gallery_nvs(kGalleryNamespace, false);
@@ -240,9 +241,8 @@ void Application::Initialize() {
         items.push_back({"系统", "", nullptr, rawdraw::SettingsItemType::Section, false});
         rawdraw::SettingsItemDef volume_item{"音量", "", nullptr, rawdraw::SettingsItemType::Slider, false};
         volume_item.slider_value = codec->output_volume();
-        volume_item.on_slider = [this, codec](int volume) {
+        volume_item.on_slider = [codec](int volume) {
             codec->SetOutputVolume(volume);
-            PlayVolumePreview(volume);
         };
         items.push_back(std::move(volume_item));
         items.push_back({"重启", "执行", nullptr, rawdraw::SettingsItemType::Action, false,
@@ -823,19 +823,133 @@ void Application::OnDownClick() {
     }
 }
 
-bool Application::AdjustSettingsSlider(int delta) {
+bool Application::AdjustSettingsSlider(int delta, bool* changed, bool request_refresh) {
+    if (changed) *changed = false;
     if (!rawdraw_ui_manager_ ||
         rawdraw_ui_manager_->GetCurrentPage() != ui::RawDrawPageId::Settings) {
         return false;
     }
     auto* sr = rawdraw_ui_manager_->GetSettingsRenderer();
-    if (!sr || !sr->AdjustSelectedSlider(delta)) return false;
-    rawdraw_ui_manager_->RequestActivePageRefresh();
+    if (!sr || !sr->AdjustSelectedSlider(delta, changed)) return false;
+    if (request_refresh && (!changed || *changed)) {
+        rawdraw_ui_manager_->RequestActivePageRefresh();
+    }
     return true;
 }
 
-void Application::PlayVolumePreview(int volume) {
-    if (volume <= 0) return;
+void Application::SetUpKeyHeld(bool held) {
+    up_key_held_.store(held, std::memory_order_release);
+    if (!held && volume_repeat_delta_.load(std::memory_order_acquire) > 0) {
+        volume_repeat_cancel_.store(true, std::memory_order_release);
+    }
+    if (held && down_key_held_.load(std::memory_order_acquire) &&
+        volume_repeat_active_.load(std::memory_order_acquire)) {
+        volume_repeat_cancel_.store(true, std::memory_order_release);
+    }
+}
+
+void Application::SetDownKeyHeld(bool held) {
+    down_key_held_.store(held, std::memory_order_release);
+    if (!held && volume_repeat_delta_.load(std::memory_order_acquire) < 0) {
+        volume_repeat_cancel_.store(true, std::memory_order_release);
+    }
+    if (held && up_key_held_.load(std::memory_order_acquire) &&
+        volume_repeat_active_.load(std::memory_order_acquire)) {
+        volume_repeat_cancel_.store(true, std::memory_order_release);
+    }
+}
+
+bool Application::VolumeRepeatStillHeld() const {
+    if (volume_repeat_cancel_.load(std::memory_order_acquire)) return false;
+    if (up_key_held_.load(std::memory_order_acquire) &&
+        down_key_held_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    const int delta = volume_repeat_delta_.load(std::memory_order_acquire);
+    if (delta > 0) return up_key_held_.load(std::memory_order_acquire);
+    if (delta < 0) return down_key_held_.load(std::memory_order_acquire);
+    return false;
+}
+
+bool Application::BeginVolumeRepeat(int delta) {
+    auto* sr = rawdraw_ui_manager_ ? rawdraw_ui_manager_->GetSettingsRenderer() : nullptr;
+    if (!sr || rawdraw_ui_manager_->GetCurrentPage() != ui::RawDrawPageId::Settings ||
+        !sr->SelectedIsSlider()) {
+        return false;
+    }
+    volume_repeat_delta_.store(delta, std::memory_order_release);
+    volume_repeat_cancel_.store(false, std::memory_order_release);
+    volume_repeat_active_.store(true, std::memory_order_release);
+    volume_step_wait_refresh_.store(false, std::memory_order_release);
+    if (rawdraw_ui_manager_->IsDisplayRefreshPending()) {
+        volume_step_defer_start_.store(true, std::memory_order_release);
+        ESP_LOGI(kTag, "Volume repeat waits for the current frame");
+        return true;
+    }
+    volume_step_defer_start_.store(false, std::memory_order_release);
+    RunVolumeStep();
+    return true;
+}
+
+void Application::RunVolumeStep() {
+    if (!volume_repeat_active_.load(std::memory_order_acquire)) return;
+    volume_step_gates_.store(0, std::memory_order_release);
+    bool changed = false;
+    if (!AdjustSettingsSlider(volume_repeat_delta_.load(std::memory_order_acquire), &changed, false)) {
+        volume_repeat_active_.store(false, std::memory_order_release);
+        return;
+    }
+    if (!changed) {
+        volume_repeat_active_.store(false, std::memory_order_release);
+        ESP_LOGI(kTag, "Volume repeat stopped at the limit");
+        return;
+    }
+    auto* codec = Board::GetInstance().GetAudioCodec();
+    const int volume = codec ? codec->output_volume() : 0;
+    ESP_LOGI(kTag, "Volume step %d", volume);
+    volume_step_wait_refresh_.store(true, std::memory_order_release);
+    rawdraw_ui_manager_->RefreshShownPage();
+    PlayVolumePreview(volume, [this]() { OnVolumePreviewDone(); });
+}
+
+void Application::OnVolumeRepeatRefreshIdle() {
+    if (volume_step_defer_start_.exchange(false, std::memory_order_acq_rel)) {
+        if (volume_repeat_active_.load(std::memory_order_acquire) && VolumeRepeatStillHeld()) {
+            RunVolumeStep();
+        } else {
+            volume_repeat_active_.store(false, std::memory_order_release);
+        }
+        return;
+    }
+    if (!volume_step_wait_refresh_.exchange(false, std::memory_order_acq_rel)) return;
+    NoteVolumeStepGate(1);
+}
+
+void Application::OnVolumePreviewDone() {
+    NoteVolumeStepGate(2);
+}
+
+void Application::NoteVolumeStepGate(int bit) {
+    const int prev = volume_step_gates_.fetch_or(bit, std::memory_order_acq_rel);
+    if ((prev & bit) != 0) return;
+    if ((prev | bit) == 3) {
+        TryContinueVolumeStep();
+    }
+}
+
+void Application::TryContinueVolumeStep() {
+    if (!volume_repeat_active_.load(std::memory_order_acquire) || !VolumeRepeatStillHeld()) {
+        volume_repeat_active_.store(false, std::memory_order_release);
+        return;
+    }
+    RunVolumeStep();
+}
+
+void Application::PlayVolumePreview(int volume, std::function<void()> on_done) {
+    if (volume <= 0) {
+        if (on_done) on_done();
+        return;
+    }
     constexpr int kSampleRate = AUDIO_OUTPUT_SAMPLE_RATE;
     constexpr int kDurationMs = 150;
     constexpr int kSamples = kSampleRate * kDurationMs / 1000;
@@ -849,14 +963,16 @@ void Application::PlayVolumePreview(int volume) {
         pcm[i] = static_cast<int16_t>(amp * sinf(2.0f * static_cast<float>(M_PI) * kToneHz * i / kSampleRate));
     }
     audio_service_.UnmuteOutput();
-    audio_service_.PlayPcm(std::move(pcm));
+    audio_service_.PlayPcm(std::move(pcm), std::move(on_done));
 }
 
 void Application::OnUpLongPress() {
     ESP_LOGI(kTag, "UP long press");
-    NoteButtonActivity();
+    MarkUserActivity();
+    Board::GetInstance().FlashActivityLed();
     if (!rawdraw_ui_manager_) return;
-    if (AdjustSettingsSlider(rawdraw::SettingsRenderer::kSliderLongPressStep)) return;
+    if (BeginVolumeRepeat(rawdraw::SettingsRenderer::kSliderLongPressStep)) return;
+    rawdraw_ui_manager_->RequestActivePageRefresh();
     const auto page = rawdraw_ui_manager_->GetCurrentPage();
     if (page == ui::RawDrawPageId::Settings || page == ui::RawDrawPageId::Weather ||
         page == ui::RawDrawPageId::Calendar) {
@@ -867,8 +983,12 @@ void Application::OnUpLongPress() {
 
 void Application::OnDownLongPress() {
     ESP_LOGI(kTag, "DOWN long press");
-    NoteButtonActivity();
-    if (AdjustSettingsSlider(-rawdraw::SettingsRenderer::kSliderLongPressStep)) return;
+    MarkUserActivity();
+    Board::GetInstance().FlashActivityLed();
+    if (BeginVolumeRepeat(-rawdraw::SettingsRenderer::kSliderLongPressStep)) return;
+    if (rawdraw_ui_manager_) {
+        rawdraw_ui_manager_->RequestActivePageRefresh();
+    }
     if (rawdraw_ui_manager_) {
         ESP_LOGI(kTag, "DOWN long press - entering settings");
         rawdraw_ui_manager_->SwitchPage(ui::RawDrawPageId::Settings);

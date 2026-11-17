@@ -71,9 +71,11 @@ public:
     void UpdateSlider(int index, int value);
     /**
      * @brief Step the selected Slider row by delta (clamped to 0..100)
-     * @return false when no dialog is open and the selected row is not a Slider
+     * @param changed set when the value actually moves; unchanged at 0 or 100
+     * @return false when a dialog is open or the selected row is not a Slider
      */
-    bool AdjustSelectedSlider(int delta);
+    bool AdjustSelectedSlider(int delta, bool* changed = nullptr);
+    bool SelectedIsSlider() const;
     int GetItemCount() const { return static_cast<int>(items_.size()); }
     int GetSelectedIndex() const { return selected_index_; }
 
