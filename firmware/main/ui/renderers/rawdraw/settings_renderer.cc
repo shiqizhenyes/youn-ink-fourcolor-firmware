@@ -747,17 +747,14 @@ void SettingsRenderer::RenderItem(uint8_t* fb, int width, int y,
     } else if (item.type == SettingsItemType::Slider ||
                item.type == SettingsItemType::Meter) {
         const bool known = item.slider_value >= 0;
-        const bool meter = item.type == SettingsItemType::Meter;
         char value_buf[16];
-        if (!known) {
-            snprintf(value_buf, sizeof(value_buf), "--");
-        } else if (meter) {
+        if (known) {
             snprintf(value_buf, sizeof(value_buf), "%d", item.slider_value);
         } else {
-            snprintf(value_buf, sizeof(value_buf), "%d%%", item.slider_value);
+            snprintf(value_buf, sizeof(value_buf), "--");
         }
-        // Reserve the width of "100%" so a volume slider does not shift.
-        const int value_col_w = MeasureTextWidth(meter ? "100" : "100%", value_font_);
+        // Reserve the width of "100" so the bar does not shift as the value changes.
+        const int value_col_w = MeasureTextWidth("100", value_font_);
         const int value_w = MeasureTextWidth(value_buf, value_font_);
         DrawText(fb, width, content_right - value_w,
                  InkCenteredTextTopY(value_font_, value_buf, row_center_y, kValueOpticalNudgeY),
@@ -1505,7 +1502,7 @@ void SettingsRenderer::RenderVolumeDialog(uint8_t* fb, int width, int height) {
     DrawHLine(fb, width, dialog_y + 42, dialog_x + 14, dialog_x + dialog_w - 14, border);
 
     char volume_buf[16];
-    snprintf(volume_buf, sizeof(volume_buf), "%d%%", volume_dialog_value_);
+    snprintf(volume_buf, sizeof(volume_buf), "%d", volume_dialog_value_);
     const int value_w = MeasureTextWidth(volume_buf, title_font_);
     DrawText(fb, width, dialog_x + (dialog_w - value_w) / 2,
              InkCenteredTextTopY(title_font_, volume_buf, dialog_y + 70, 0),

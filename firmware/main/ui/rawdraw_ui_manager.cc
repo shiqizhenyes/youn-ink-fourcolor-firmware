@@ -91,9 +91,8 @@ bool IsNavigationClick(const rawdraw::ButtonEvent& event) {
 
 void DrawBatteryIcon(uint8_t* fb, int width, int x, int y, int level, bool vertical) {
     level = std::max(0, std::min(100, level));
-    const rawdraw::Color battery_color = level <= 15
-        ? rawdraw::ThemeManager::Get().Style(rawdraw::ThemeToken::Danger).border
-        : rawdraw::ThemeManager::Get().Style(rawdraw::ThemeToken::TextPrimary).fg;
+    const rawdraw::Color battery_color =
+        rawdraw::ThemeManager::Get().Style(rawdraw::ThemeToken::TextPrimary).fg;
     if (vertical) {
         const int body_w = 9;
         const int cap_h = 2;

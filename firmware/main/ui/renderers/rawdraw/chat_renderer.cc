@@ -614,9 +614,9 @@ void ChatRenderer::RenderVolumeDialog(uint8_t* fb, int width, int height) {
              title, font_, text, height);
     DrawHLine(fb, width, dialog_y + 42, dialog_x + 14, dialog_x + dialog_w - 14, border);
 
-    // Volume percentage display
+    // Volume value, without a percent sign
     char volume_buf[16];
-    snprintf(volume_buf, sizeof(volume_buf), "%d%%", volume_dialog_value_);
+    snprintf(volume_buf, sizeof(volume_buf), "%d", volume_dialog_value_);
     const int value_w = MeasureTextWidth(volume_buf, title_font_);
     DrawText(fb, width, dialog_x + (dialog_w - value_w) / 2,
              InkCenteredTextTopY(title_font_, volume_buf, dialog_y + 70, 0),
