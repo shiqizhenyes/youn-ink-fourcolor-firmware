@@ -140,6 +140,17 @@ void ClearDialogRegionRounded(uint8_t* fb, int width, int height,
                         ThemeManager::Get().Style(ThemeToken::BackgroundPrimary));
 }
 
+void DrawVerticalBatteryMark(uint8_t* fb, int width, int x, int center_y, Color color) {
+    const int body_w = 9;
+    const int cap_h = 2;
+    const int body_h = 14;
+    const int left = x + (16 - body_w) / 2;
+    const int top = center_y - (cap_h + body_h) / 2;
+    DrawRectBorder(fb, width, {left, top + cap_h, body_w, body_h}, 1, color);
+    DrawRect(fb, width, {left + 3, top, 3, cap_h}, color);
+    DrawRect(fb, width, {left + 2, top + cap_h + 2, body_w - 4, body_h - 4}, color);
+}
+
 void DrawNfcMark(uint8_t* fb, int width, int x, int center_y, Color color) {
     // Two-pixel contactless mark. The settings font has no NFC glyph.
     for (int dy = -1; dy <= 0; ++dy) {
@@ -166,6 +177,10 @@ void DrawNfcMark(uint8_t* fb, int width, int x, int center_y, Color color) {
                                              int x, int center_y, Color color) {
     if (label == "NFC") {
         DrawNfcMark(fb, width, x, center_y, color);
+        return;
+    }
+    if (label == "电池") {
+        DrawVerticalBatteryMark(fb, width, x, center_y, color);
         return;
     }
 
@@ -207,7 +222,7 @@ void DrawNfcMark(uint8_t* fb, int width, int x, int center_y, Color color) {
         icon_char = "\xef\x81\x9a";  // U+F05A info-circle
     } else if (label == "音量") {
         icon_char = "\xef\x80\xa8";  // U+F028 volume-up
-    } else if (label == "电池" || label == "电池方向") {
+    } else if (label == "电池方向") {
         icon_char = "\xef\x89\x80";  // U+F240 battery-full
     } else if (label == "重启") {
         icon_char = "\xef\x80\xa1";  // U+F021 sync/refresh (旋转)

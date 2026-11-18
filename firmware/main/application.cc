@@ -1436,7 +1436,6 @@ void Application::UpdateStatusBarForUi(bool request_panel_refresh) {
         data.server_connected = http_server_running;
         data.battery_level = battery_level;
         data.battery_charging = charging;
-        data.battery_vertical = true;
         rawdraw_ui_manager_->UpdateStatusBar(data);
         UpdateWifiSettingsItem(rawdraw_ui_manager_->GetSettingsRenderer(), wifi_connected);
         const std::string lan_ip = wifi_connected ? WifiManager::GetInstance().GetIpAddress() : "";

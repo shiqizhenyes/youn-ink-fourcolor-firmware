@@ -92,7 +92,7 @@ struct RawDrawStatusBarData {
     bool bluetooth_enabled = false;
     int battery_level = -1;       // -1 = unknown
     bool battery_charging = false;
-    bool battery_vertical = true;
+    bool battery_vertical = false;
     std::string date_format;      // "" = default (M月D日), "iso" = yyyy-mm-dd, "hidden" = hide date
     std::string server_date;      // date from WSS (yyyy-mm-dd), fallback for RTC
     std::string server_weekday;   // weekday from WSS (周一~周日)

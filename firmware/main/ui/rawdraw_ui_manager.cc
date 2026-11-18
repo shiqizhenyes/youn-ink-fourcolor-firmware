@@ -329,7 +329,7 @@ RawDrawUiManager::RawDrawUiManager()
     status_bar_data_.server_connected = false;
     status_bar_data_.battery_level = -1;
     status_bar_data_.battery_charging = false;
-    status_bar_data_.battery_vertical = true;
+    status_bar_data_.battery_vertical = false;
 
     ESP_LOGI(kTag, "RawDraw UI Manager created (no LVGL)");
 }
