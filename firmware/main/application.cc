@@ -74,6 +74,7 @@ RTC_DATA_ATTR int s_timer_wake_reason = kTimerWakeNone;
 RTC_DATA_ATTR int s_sleep_page = -1;
 // Settings row selected before sleep. The left category follows this row.
 RTC_DATA_ATTR char s_settings_selected_label[48] = {};
+constexpr char kSettingsFastBaselinePath[] = "/spiffs/settings_fast.bin";
 
 int LocalDateKey(const struct tm& tm) {
     return (tm.tm_year + 1900) * 10000 + (tm.tm_mon + 1) * 100 + tm.tm_mday;
@@ -225,6 +226,10 @@ void Application::Initialize() {
     defer_wake_refresh_ = button_wake;
     // Keep the previous e-paper image until Wi-Fi connects or the connect wait ends.
     rawdraw_ui_manager_->SetSkipInitialRefresh(woke_for_refresh_ || woke_for_broadcast_ || button_wake);
+    if (from_deep_sleep &&
+        rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::Settings) {
+        lcd->LoadFastBaseline(kSettingsFastBaselinePath);
+    }
     rawdraw::ApTransferServer::SetActivityCallback([this]() { MarkUserActivity(); });
     rawdraw_ui_manager_->Init(lcd, [lcd](const rawdraw::Rect&, bool urgent) {
         if (urgent) {
@@ -1393,6 +1398,14 @@ void Application::EnterManualSleep() {
     esp_wifi_stop();
     vTaskDelay(pdMS_TO_TICKS(300));
     WaitForDisplayRefreshIdle();
+    if (s_sleep_page == static_cast<int>(ui::RawDrawPageId::Settings)) {
+        auto* lcd = static_cast<CustomLcdDisplay*>(Board::GetInstance().GetDisplay());
+        if (lcd == nullptr || !lcd->SaveFastBaseline(kSettingsFastBaselinePath)) {
+            remove(kSettingsFastBaselinePath);
+        }
+    } else {
+        remove(kSettingsFastBaselinePath);
+    }
     esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(BOOT_BUTTON_GPIO), 0);
     uint32_t programmed_s = 0;
     const uint32_t wall_s = ArmTimerWakeup(&programmed_s);

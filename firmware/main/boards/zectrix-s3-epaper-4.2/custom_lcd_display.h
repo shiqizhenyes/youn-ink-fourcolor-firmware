@@ -85,6 +85,15 @@ public:
     // Settings and the quick-switch popup use the black/yellow RAM waveform.
     // Other screens keep the factory waveform. Ignored on the 1bpp panel.
     void SetFastBlackYellowRefresh(bool enable);
+    /**
+     * @brief Write the black/yellow fast-refresh mask so the next boot can skip the yellow clear
+     * @return false when there is no valid baseline or the file cannot be written
+     */
+    bool SaveFastBaseline(const char* path);
+    /**
+     * @brief Restore a mask saved by SaveFastBaseline(). The panel must still show that frame.
+     */
+    bool LoadFastBaseline(const char* path);
     
 private:
     const custom_lcd_spi_t lcd_spi_data;

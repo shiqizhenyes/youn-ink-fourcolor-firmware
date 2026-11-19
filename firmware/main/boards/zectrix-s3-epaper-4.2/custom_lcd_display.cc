@@ -921,6 +921,60 @@ void CustomLcdDisplay::InvalidateFastBaseline() {
     fast_baseline_valid_ = false;
 }
 
+bool CustomLcdDisplay::SaveFastBaseline(const char* path) {
+    if (!path || !fast_mask_ || fast_mask_bytes_ == 0 || !fast_baseline_valid_) {
+        return false;
+    }
+    FILE* file = fopen(path, "wb");
+    if (file == nullptr) {
+        ESP_LOGW(TAG, "Fast baseline save failed: %s", path);
+        return false;
+    }
+    const uint32_t bytes = static_cast<uint32_t>(fast_mask_bytes_);
+    const bool ok = fwrite(&bytes, sizeof(bytes), 1, file) == 1 &&
+                    fwrite(fast_mask_, 1, bytes, file) == bytes;
+    fclose(file);
+    if (!ok) {
+        remove(path);
+        ESP_LOGW(TAG, "Fast baseline save incomplete: %s", path);
+        return false;
+    }
+    return true;
+}
+
+bool CustomLcdDisplay::LoadFastBaseline(const char* path) {
+    if (!path || !fast_mask_ || fast_mask_bytes_ == 0) {
+        return false;
+    }
+    FILE* file = fopen(path, "rb");
+    if (file == nullptr) {
+        return false;
+    }
+    uint32_t bytes = 0;
+    const bool header_ok = fread(&bytes, sizeof(bytes), 1, file) == 1;
+    if (!header_ok || bytes != fast_mask_bytes_) {
+        fclose(file);
+        ESP_LOGW(TAG, "Fast baseline rejected: size %u expected %u",
+                 static_cast<unsigned>(bytes), static_cast<unsigned>(fast_mask_bytes_));
+        return false;
+    }
+    if (dirty_mutex) {
+        xSemaphoreTake(dirty_mutex, portMAX_DELAY);
+    }
+    const bool ok = fread(fast_mask_, 1, bytes, file) == bytes;
+    fast_baseline_valid_ = ok;
+    if (dirty_mutex) {
+        xSemaphoreGive(dirty_mutex);
+    }
+    fclose(file);
+    if (!ok) {
+        fast_baseline_valid_ = false;
+        ESP_LOGW(TAG, "Fast baseline load incomplete");
+        return false;
+    }
+    return true;
+}
+
 void CustomLcdDisplay::WaitForFastInterval() {
     if (last_fast_start_us_ == 0) {
         return;
