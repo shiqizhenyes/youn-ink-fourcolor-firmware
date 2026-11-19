@@ -202,7 +202,7 @@ void DrawNfcMark(uint8_t* fb, int width, int x, int center_y, Color color) {
         icon_char = "\xef\x80\x97";  // U+F017 clock
     } else if (label == "播报时间") {
         icon_char = "\xef\x83\xb3";  // U+F0F3 bell
-    } else if (label == "自动播报") {
+    } else if (label == "自动播报" || label == "播报声音") {
         icon_char = "\xef\x80\xa8";  // U+F028 volume
     } else if (label == "网络" || label == "Wi-Fi") {
         icon_char = "\xef\x87\xab";  // U+F1EB wifi
@@ -1169,6 +1169,30 @@ void SettingsRenderer::SetItems(const std::vector<SettingsItemDef>& items) {
     EnsureSelectionVisible();
     ShowCategoryHint();
     needs_full_refresh_ = true;
+}
+
+std::string SettingsRenderer::GetSelectedLabel() const {
+    if (selected_index_ < 0 || selected_index_ >= static_cast<int>(items_.size())) {
+        return {};
+    }
+    if (items_[selected_index_].type == SettingsItemType::Section) {
+        return {};
+    }
+    return items_[selected_index_].label;
+}
+
+bool SettingsRenderer::SelectLabel(const std::string& label) {
+    if (label.empty()) return false;
+    for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
+        if (items_[i].type == SettingsItemType::Section) continue;
+        if (items_[i].label != label) continue;
+        selected_index_ = i;
+        first_visible_index_ = i;
+        EnsureSelectionVisible();
+        needs_full_refresh_ = true;
+        return true;
+    }
+    return false;
 }
 
 void SettingsRenderer::UpdateItem(int index, const std::string& value) {

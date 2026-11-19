@@ -46,6 +46,7 @@ using ui::kSettingsLanIpIndex;
 using ui::kSettingsNightRefreshIndex;
 using ui::kSettingsSlideshowIndex;
 using ui::kSettingsVolumeIndex;
+using ui::kSettingsWeatherVoiceIndex;
 using ui::kSettingsWifiIndex;
 constexpr int64_t kIdleSleepUs = 5LL * 60 * 1000 * 1000;
 // Cap on waiting for a busy fetch/announcement/refresh before sleeping anyway.
@@ -69,8 +70,10 @@ enum TimerWakeReason : int {
     kTimerWakeCalendar = 3,
 };
 RTC_DATA_ATTR int s_timer_wake_reason = kTimerWakeNone;
-// Page shown when the device went to sleep; restored on wake for weather/calendar.
+// Page shown when the device went to sleep; restored on wake for settings, weather, and calendar.
 RTC_DATA_ATTR int s_sleep_page = -1;
+// Settings row selected before sleep. The left category follows this row.
+RTC_DATA_ATTR char s_settings_selected_label[48] = {};
 
 int LocalDateKey(const struct tm& tm) {
     return (tm.tm_year + 1900) * 10000 + (tm.tm_mon + 1) * 100 + tm.tm_mday;
@@ -210,8 +213,11 @@ void Application::Initialize() {
 
     auto* lcd = static_cast<CustomLcdDisplay*>(display);
     rawdraw_ui_manager_ = std::make_unique<ui::RawDrawUiManager>();
-    if (from_deep_sleep && (s_sleep_page == static_cast<int>(ui::RawDrawPageId::Weather) ||
-                            s_sleep_page == static_cast<int>(ui::RawDrawPageId::Calendar))) {
+    const bool restore_sleep_page =
+        from_deep_sleep && (s_sleep_page == static_cast<int>(ui::RawDrawPageId::Settings) ||
+                            s_sleep_page == static_cast<int>(ui::RawDrawPageId::Weather) ||
+                            s_sleep_page == static_cast<int>(ui::RawDrawPageId::Calendar));
+    if (restore_sleep_page) {
         rawdraw_ui_manager_->SetInitialPage(static_cast<ui::RawDrawPageId>(s_sleep_page));
     }
     s_sleep_page = -1;
@@ -284,6 +290,11 @@ void Application::Initialize() {
         items.push_back({"自动播报", ink::GetAutoSpeak() ? "开启" : "关闭", nullptr,
                          rawdraw::SettingsItemType::Checkbox, ink::GetAutoSpeak(),
                          []() { ink::SetAutoSpeak(!ink::GetAutoSpeak()); }});
+        items.push_back({"播报声音", ink::FormatWeatherVoice(ink::GetWeatherVoice()), nullptr,
+                         rawdraw::SettingsItemType::Action, false,
+                         []() {
+                             ink::SetWeatherVoice(ink::NextWeatherVoice(ink::GetWeatherVoice()));
+                         }});
         items.push_back({"白天更新", ink::FormatRefreshMinutes(ink::GetDayRefreshMin()), nullptr,
                          rawdraw::SettingsItemType::Action, false,
                          []() { ink::SetDayRefreshMin(ink::NextRefreshMinutes(ink::GetDayRefreshMin())); }});
@@ -353,6 +364,11 @@ void Application::Initialize() {
         items.push_back({"关于", "", nullptr, rawdraw::SettingsItemType::Section, false});
         items.push_back({"固件", PROJECT_VER, nullptr, rawdraw::SettingsItemType::Normal, false});
         sr->SetItems(items);
+        if (from_deep_sleep &&
+            rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::Settings &&
+            s_settings_selected_label[0] != '\0') {
+            sr->SelectLabel(s_settings_selected_label);
+        }
         sr->SetFirmwareVersion("v" PROJECT_VER);
 
         uint8_t mac_bytes[6] = {};
@@ -584,6 +600,7 @@ void Application::SetupWeatherSettingsItems() {
         sr->UpdateItem(kSettingsBroadcastIndex, ink::FormatBroadcastTime(ink::GetBroadcastMinute()));
         sr->UpdateChecked(kSettingsAutoSpeakIndex, auto_speak);
         sr->UpdateItem(kSettingsAutoSpeakIndex, auto_speak ? "开启" : "关闭");
+        sr->UpdateItem(kSettingsWeatherVoiceIndex, ink::FormatWeatherVoice(ink::GetWeatherVoice()));
         sr->UpdateItem(kSettingsDayRefreshIndex, ink::FormatRefreshMinutes(ink::GetDayRefreshMin()));
         sr->UpdateItem(kSettingsNightRefreshIndex, ink::FormatRefreshMinutes(ink::GetNightRefreshMin()));
         last_broadcast_check_minute_ = -1;
@@ -1359,6 +1376,15 @@ void Application::EnterManualSleep() {
     }
     s_sleep_page = rawdraw_ui_manager_ ? static_cast<int>(rawdraw_ui_manager_->GetCurrentPage())
                                        : static_cast<int>(ui::RawDrawPageId::Gallery);
+    s_settings_selected_label[0] = '\0';
+    if (rawdraw_ui_manager_ &&
+        rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::Settings) {
+        if (auto* settings = rawdraw_ui_manager_->GetSettingsRenderer()) {
+            const std::string label = settings->GetSelectedLabel();
+            snprintf(s_settings_selected_label, sizeof(s_settings_selected_label), "%s",
+                     label.c_str());
+        }
+    }
     if (rawdraw_ui_manager_ && rawdraw_ui_manager_->IsHttpServerRunning()) {
         rawdraw_ui_manager_->StopHttpServersForSleep();
     }

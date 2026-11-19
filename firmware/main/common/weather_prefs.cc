@@ -16,6 +16,7 @@ namespace {
 constexpr char kNamespace[] = "weather";
 constexpr char kBroadcastMinuteKey[] = "bcast_min";
 constexpr char kAutoSpeakKey[] = "auto_speak";
+constexpr char kWeatherVoiceKey[] = "voice";
 constexpr char kLastBroadcastKey[] = "bcast_date";
 constexpr char kDayRefreshKey[] = "day_refresh";
 constexpr char kNightRefreshKey[] = "night_refresh";
@@ -23,6 +24,10 @@ constexpr int kMinutesPerDay = 24 * 60;
 constexpr int kCycle[] = {kBroadcastOff, 360, 390, 420, 450, 480, 510, 540};
 constexpr int kRefreshCycle[] = {0, 30, 60, 120, 180, 360};
 constexpr int kRefreshCycleCount = sizeof(kRefreshCycle) / sizeof(kRefreshCycle[0]);
+
+int NormalizeWeatherVoice(int voice) {
+    return voice == kWeatherVoiceFemaleA ? kWeatherVoiceFemaleA : kWeatherVoiceXiaole;
+}
 
 std::function<void()>& ChangedCallback() {
     static std::function<void()> callback;
@@ -61,6 +66,36 @@ void SetAutoSpeak(bool enabled) {
         nvs.SetBool(kAutoSpeakKey, enabled);
     }
     NotifyChanged();
+}
+
+int GetWeatherVoice() {
+    Settings nvs(kNamespace);
+    return NormalizeWeatherVoice(nvs.GetInt(kWeatherVoiceKey, kWeatherVoiceXiaole));
+}
+
+void SetWeatherVoice(int voice) {
+    {
+        Settings nvs(kNamespace, true);
+        nvs.SetInt(kWeatherVoiceKey, NormalizeWeatherVoice(voice));
+    }
+    NotifyChanged();
+}
+
+int NextWeatherVoice(int current) {
+    return NormalizeWeatherVoice(current) == kWeatherVoiceXiaole ? kWeatherVoiceFemaleA
+                                                                 : kWeatherVoiceXiaole;
+}
+
+std::string FormatWeatherVoice(int voice) {
+    return NormalizeWeatherVoice(voice) == kWeatherVoiceFemaleA ? "女声A" : "小乐";
+}
+
+const char* WeatherVoiceToken(int voice) {
+    return NormalizeWeatherVoice(voice) == kWeatherVoiceFemaleA ? "female_a" : "xiaole";
+}
+
+int ParseWeatherVoice(const std::string& text) {
+    return text == "female_a" ? kWeatherVoiceFemaleA : kWeatherVoiceXiaole;
 }
 
 int GetLastBroadcastDate() {

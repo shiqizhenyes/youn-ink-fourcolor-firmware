@@ -26,6 +26,21 @@ void SetBroadcastMinute(int minute_of_day);
 bool GetAutoSpeak();
 void SetAutoSpeak(bool enabled);
 
+/** 小乐 (ESP-SR) is the factory voice. 女声A is LingTTS. */
+constexpr int kWeatherVoiceXiaole = 0;
+constexpr int kWeatherVoiceFemaleA = 1;
+
+int GetWeatherVoice();
+void SetWeatherVoice(int voice);
+/** @brief Next value in the device settings cycle: 小乐, 女声A */
+int NextWeatherVoice(int current);
+/** @return "小乐" or "女声A" */
+std::string FormatWeatherVoice(int voice);
+/** @return "xiaole" or "female_a" */
+const char* WeatherVoiceToken(int voice);
+/** @brief Parse "xiaole" or "female_a"; anything else is 小乐 */
+int ParseWeatherVoice(const std::string& text);
+
 /** @brief Local date (YYYYMMDD) of the last daily announcement */
 int GetLastBroadcastDate();
 void SetLastBroadcastDate(int yyyymmdd);

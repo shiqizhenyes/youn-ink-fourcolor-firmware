@@ -4,10 +4,16 @@
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.16)
 
-set(PROJECT_VER "6.6.2")
+set(PROJECT_VER "6.6.3")
 
-# Local project components under main/components
-list(APPEND EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/main/components")
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/lingtts_sdk.cmake")
+set(LINGTTS_SDK "${CMAKE_CURRENT_LIST_DIR}/third_party/lingtts")
+ink_ensure_lingtts("${LINGTTS_SDK}")
+
+# Local project components under main/components, plus the fetched LingTTS SDK.
+list(APPEND EXTRA_COMPONENT_DIRS
+    "${CMAKE_CURRENT_LIST_DIR}/main/components"
+    "${LINGTTS_SDK}/components")
 
 # Add this line to disable the specific warning
 add_compile_options(-Wno-missing-field-initializers)

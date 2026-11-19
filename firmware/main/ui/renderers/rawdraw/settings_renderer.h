@@ -84,6 +84,10 @@ public:
     bool SelectedIsSlider() const;
     int GetItemCount() const { return static_cast<int>(items_.size()); }
     int GetSelectedIndex() const { return selected_index_; }
+    /** @brief Label of the selected row, or empty when nothing is selected */
+    std::string GetSelectedLabel() const;
+    /** @brief Select a non-section row by label. Returns false when it is missing. */
+    bool SelectLabel(const std::string& label);
 
     // Debug info
     void ShowDebugInfo();

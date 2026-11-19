@@ -42,6 +42,7 @@ firmware/build/
 firmware/sdkconfig
 firmware/sdkconfig.old
 firmware/managed_components/
+firmware/third_party/lingtts/
 firmware/releases/
 firmware/debugscreenshot/
 firmware/pagepics/*.png

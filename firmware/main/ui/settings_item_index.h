@@ -16,11 +16,12 @@ constexpr int kSettingsNfcIndex = 3;
 constexpr int kSettingsSlideshowIndex = 6;
 constexpr int kSettingsBroadcastIndex = 8;
 constexpr int kSettingsAutoSpeakIndex = 9;
-constexpr int kSettingsDayRefreshIndex = 10;
-constexpr int kSettingsNightRefreshIndex = 11;
-constexpr int kSettingsWifiIndex = 13;
-constexpr int kSettingsHttpServerIndex = 14;
-constexpr int kSettingsLanIpIndex = 15;
+constexpr int kSettingsWeatherVoiceIndex = 10;
+constexpr int kSettingsDayRefreshIndex = 11;
+constexpr int kSettingsNightRefreshIndex = 12;
+constexpr int kSettingsWifiIndex = 14;
+constexpr int kSettingsHttpServerIndex = 15;
+constexpr int kSettingsLanIpIndex = 16;
 
 }  // namespace ui
 

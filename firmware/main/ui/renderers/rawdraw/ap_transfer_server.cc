@@ -797,6 +797,12 @@ esp_err_t ApTransferServer::SettingsHandler(httpd_req_t* req) {
             ink::SetAutoSpeak(cJSON_IsTrue(speak_item));
             ESP_LOGI(kTag, "AP settings updated: auto_speak=%d", cJSON_IsTrue(speak_item) ? 1 : 0);
         }
+        cJSON* voice_item = cJSON_GetObjectItemCaseSensitive(root, "bcast_voice");
+        if (cJSON_IsString(voice_item) && voice_item->valuestring) {
+            ink::SetWeatherVoice(ink::ParseWeatherVoice(voice_item->valuestring));
+            ESP_LOGI(kTag, "AP settings updated: bcast_voice=%s",
+                     ink::WeatherVoiceToken(ink::GetWeatherVoice()));
+        }
         cJSON* day_item = cJSON_GetObjectItemCaseSensitive(root, "day_refresh_min");
         if (cJSON_IsNumber(day_item)) {
             ink::SetDayRefreshMin(day_item->valueint);
@@ -845,6 +851,7 @@ esp_err_t ApTransferServer::SettingsHandler(httpd_req_t* req) {
                                 ? ""
                                 : ink::FormatBroadcastTime(bcast_minute).c_str());
     cJSON_AddBoolToObject(resp, "auto_speak", ink::GetAutoSpeak());
+    cJSON_AddStringToObject(resp, "bcast_voice", ink::WeatherVoiceToken(ink::GetWeatherVoice()));
     cJSON_AddNumberToObject(resp, "day_refresh_min", ink::GetDayRefreshMin());
     cJSON_AddNumberToObject(resp, "night_refresh_min", ink::GetNightRefreshMin());
     cJSON_AddBoolToObject(resp, "closing", close_service);
