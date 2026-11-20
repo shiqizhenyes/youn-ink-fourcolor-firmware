@@ -13,6 +13,7 @@
 #include "rawdraw/rawdraw.h"
 #include "rawdraw/style.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <ctime>
 #include <string>
@@ -26,15 +27,18 @@ namespace {
 
 constexpr int kBodyTopGap = 8;
 constexpr int kMarginX = 10;
-constexpr int kCellHeight = 34;
-constexpr int kHeaderFontSize = 12;
+constexpr int kHeaderPadY = 3;
 constexpr int kHeaderGap = 5;
-constexpr int kDateLineGap = 2;
+constexpr int kSolarLunarGap = 8;
 constexpr int kWeekendStart = 5;
-constexpr int kTodayPadding = 2;
-constexpr int kTipSpacer = 16;
+constexpr int kTodayPadX = 10;
+constexpr int kTodayPadY = 3;
+constexpr int kTipBandExtra = 16;
 constexpr int kSeparatorMarginX = 5;
 constexpr int kRows = 6;
+const char* const kWeekdayBar[7] = {
+    "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日",
+};
 constexpr int kDailyMarginX = 12;
 constexpr char kLuckyYi[] = "祈福 求嗣 订婚 嫁娶 出行 求财 开市 交易 安床 祭祀";
 
@@ -78,6 +82,15 @@ void FormatShichenTitle(int shichen, char* buf, size_t buf_size) {
 }
 
 int MaxInk(int a, int b) { return a > b ? a : b; }
+
+int ColumnX(int origin, int cell_w, int col) {
+    return origin + col * cell_w;
+}
+
+int ColumnWidth(int origin, int cell_w, int grid_w, int col) {
+    const int x = ColumnX(origin, cell_w, col);
+    return col >= 6 ? origin + grid_w - x : cell_w;
+}
 
 int DrawJiDivider(uint8_t* fb, int width, int height, int y) {
     (void)height;
@@ -230,58 +243,104 @@ void InkCalendarRenderer::RenderMonth(uint8_t* fb, int width, int height) {
     const int grid_w = width - kMarginX * 2;
     const int cell_w = grid_w / 7;
     const int x0 = kMarginX;
-    int y = Style::kStatusBarHeight + kBodyTopGap;
 
+    const ink_text::InkBox header_ink = ink_text::Measure(HeaderFont(), kWeekdayBar[0]);
+    const int header_h = header_ink.height + kHeaderPadY * 2;
+    const int header_y = Style::kStatusBarHeight + kBodyTopGap;
+    const int weekday_w = cell_w * kWeekendStart;
+    DrawRect(fb, width, {x0, header_y, weekday_w, header_h}, BLACK);
+    DrawRect(fb, width, {x0 + weekday_w, header_y, grid_w - weekday_w, header_h}, RED);
+    const int header_text_y = header_y + kHeaderPadY;
     for (int col = 0; col < 7; ++col) {
-        const int cx = x0 + col * cell_w + cell_w / 2;
-        const Color color = col >= kWeekendStart ? RED : BLACK;
-        ink_text::DrawCenteredAtInkTop(fb, width, height, cx, y, ink::WeekdayHeader(col), HeaderFont(), color);
+        const int col_x = ColumnX(x0, cell_w, col);
+        const int col_w = ColumnWidth(x0, cell_w, grid_w, col);
+        ink_text::DrawCenteredAtInkTop(fb, width, height, col_x + col_w / 2, header_text_y,
+                                       kWeekdayBar[col], HeaderFont(), WHITE);
     }
-    y += kHeaderFontSize + kHeaderGap;
 
+    const int grid_top = header_y + header_h + kHeaderGap;
     const int first_col = ink::WeekdayMondayFirst(year_, month_, 1);
     const int days = ink::DaysInMonth(year_, month_);
-    const int rows_used = (first_col + days + 6) / 7;
-    const ink_text::InkBox digit_box = ink_text::Measure(DayFont(), "0123456789");
-    const int date_line_h = digit_box.height + 4 + kDateLineGap;
+    int rows = (first_col + days + 6) / 7;
+    if (rows < 1) rows = 1;
+    if (rows > kRows) rows = kRows;
 
-    for (int row = 0; row < rows_used && row < kRows; ++row) {
+    const ink_text::InkBox digit_box = ink_text::Measure(DayFont(), "0123456789");
+    const ink_text::InkBox label_box = ink_text::Measure(LabelFont(), "初一");
+    const int stack_h = digit_box.height + kSolarLunarGap + label_box.height;
+    const int min_row_h = std::max(stack_h, 1);
+
+    const char* tip = ink::DailyTip(today.day_of_year);
+    const ink_text::InkBox tip_box = ink_text::Measure(TipFont(), tip);
+    const int tip_h = tip_box.height > 0 ? tip_box.height : TipFont()->line_height;
+    int band_h = tip_h + kTipBandExtra;
+    const int room = height - grid_top;
+    const int min_grid_h = min_row_h * rows;
+    if (room < min_grid_h + 1 + band_h) {
+        band_h = std::max(0, room - min_grid_h - 1);
+    }
+    const int grid_budget = std::max(0, room - 1 - band_h);
+    int row_h = rows > 0 ? grid_budget / rows : min_row_h;
+    if (row_h < min_row_h) row_h = min_row_h;
+
+    for (int row = 0; row < rows; ++row) {
+        const int row_y = grid_top + row * row_h;
+        const int slack = std::max(0, row_h - stack_h);
+        const int pad_y = std::min(kTodayPadY, slack / 2);
+        const int solar_y = row_y + slack / 2;
+        const int lunar_y = solar_y + digit_box.height + kSolarLunarGap;
+
         for (int col = 0; col < 7; ++col) {
             const int day = row * 7 + col - first_col + 1;
             if (day < 1 || day > days) continue;
 
             char num[12];
             snprintf(num, sizeof(num), "%d", day);
-            const int cx = x0 + col * cell_w + cell_w / 2;
+            const int col_x = ColumnX(x0, cell_w, col);
+            const int col_w = ColumnWidth(x0, cell_w, grid_w, col);
+            const int cx = col_x + col_w / 2;
             const int tw = MeasureTextWidth(num, DayFont());
             const bool is_today = showing_today_month && day == today.day;
-
-            Color num_color = col >= kWeekendStart ? RED : BLACK;
-            if (is_today) {
-                const int th = digit_box.height;
-                const int r = (tw > th ? tw : th) / 2 + kTodayPadding;
-                DrawCircle(fb, width, {cx, y + th / 2}, r, RED);
-                num_color = WHITE;
-            }
-            ink_text::DrawAtInkTop(fb, width, height, cx - tw / 2, y, num, DayFont(), num_color);
-
             const DayLabel label = LabelForDate(year_, month_, day);
-            if (label.text && *label.text) {
-                ink_text::DrawCenteredAtInkTop(fb, width, height, cx, y + date_line_h, label.text,
-                                               LabelFont(), label.highlight ? RED : BLACK);
+            const bool has_label = label.text && label.text[0];
+
+            if (is_today) {
+                const int label_w = has_label ? MeasureTextWidth(label.text, LabelFont()) : 0;
+                const int text_w = std::max(tw, label_w);
+                const int max_w = std::max(1, col_w - 2);
+                int rect_w = std::min(max_w, text_w + kTodayPadX * 2);
+                if (rect_w < 1) rect_w = max_w;
+                const int rect_x = col_x + (col_w - rect_w) / 2;
+                const int label_h = has_label ? ink_text::Measure(LabelFont(), label.text).height : 0;
+                const int ink_top = solar_y;
+                const int ink_bottom = has_label ? lunar_y + label_h : solar_y + digit_box.height;
+                int rect_top = ink_top - pad_y;
+                int rect_bottom = ink_bottom + pad_y;
+                const int row_bottom = row_y + row_h;
+                if (rect_top < row_y) rect_top = row_y;
+                if (rect_bottom > row_bottom) rect_bottom = row_bottom;
+                DrawRoundRect(fb, width, height, {rect_x, rect_top, rect_w, rect_bottom - rect_top},
+                              Style::kBorderRadiusSM, RED, RED, 0);
+            }
+
+            const Color num_color = is_today ? WHITE : (col >= kWeekendStart ? RED : BLACK);
+            ink_text::DrawAtInkTop(fb, width, height, cx - tw / 2, solar_y, num, DayFont(), num_color);
+            if (has_label) {
+                const Color label_color = is_today ? WHITE : (label.highlight ? RED : BLACK);
+                ink_text::DrawCenteredAtInkTop(fb, width, height, cx, lunar_y, label.text, LabelFont(),
+                                               label_color);
             }
         }
-        y += kCellHeight;
     }
 
-    y += kTipSpacer;
-    if (y < height - 12) {
-        DrawDashedHLine(fb, width, y, kSeparatorMarginX, width - kSeparatorMarginX, BLACK);
-        y += 8 + 1;
-        const ink_text::InkBox tip_box = ink_text::Measure(TipFont(), ink::DailyTip(today.day_of_year));
-        if (y + tip_box.height <= height - 2) {
-            ink_text::DrawCenteredAtInkTop(fb, width, height, width / 2, y, ink::DailyTip(today.day_of_year),
-                                           TipFont(), BLACK);
+    const int line_y = grid_top + row_h * rows;
+    if (line_y >= 0 && line_y < height) {
+        DrawDashedHLine(fb, width, line_y, kSeparatorMarginX, width - kSeparatorMarginX, BLACK);
+        const int band_top = line_y + 1;
+        const int band_actual = height - band_top;
+        if (band_actual > 0 && tip && tip[0]) {
+            const int text_top = band_actual > tip_h ? band_top + (band_actual - tip_h) / 2 : band_top;
+            ink_text::DrawCenteredAtInkTop(fb, width, height, width / 2, text_top, tip, TipFont(), BLACK);
         }
     }
 }

@@ -2,9 +2,11 @@
  * @file ink_calendar_renderer.h
  * @brief Month calendar ported from InkSight's CALENDAR mode (calendar_grid block)
  *
- * Monday-first grid, red weekends, red filled circle for today, and per-day
- * labels (festival > solar term > lunar day). The tip line under the grid is
- * chosen offline instead of by an LLM.
+ * Monday-first grid. The weekday bar reads 星期一–星期日: black Monday–Friday,
+ * red Saturday and Sunday, white type. Today is a red rounded rectangle around
+ * both the solar day and the lunar label. The tip under the dashed rule is
+ * centered between that rule and the bottom edge. Labels prefer festival,
+ * then solar term, then lunar day, and are chosen offline instead of by an LLM.
  *
  * BOOT opens a daily almanac (时辰宜忌) for today; BOOT again returns to the
  * month grid. UP/DOWN turn the day while that view is open.
