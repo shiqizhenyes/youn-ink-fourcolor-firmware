@@ -26,7 +26,9 @@ constexpr int kRefreshCycle[] = {0, 30, 60, 120, 180, 360};
 constexpr int kRefreshCycleCount = sizeof(kRefreshCycle) / sizeof(kRefreshCycle[0]);
 
 int NormalizeWeatherVoice(int voice) {
-    return voice == kWeatherVoiceFemaleA ? kWeatherVoiceFemaleA : kWeatherVoiceXiaole;
+    // A stored 小乐 value (0) and anything else land on the only remaining voice.
+    (void)voice;
+    return kWeatherVoiceXiaolin;
 }
 
 std::function<void()>& ChangedCallback() {
@@ -70,7 +72,7 @@ void SetAutoSpeak(bool enabled) {
 
 int GetWeatherVoice() {
     Settings nvs(kNamespace);
-    return NormalizeWeatherVoice(nvs.GetInt(kWeatherVoiceKey, kWeatherVoiceXiaole));
+    return NormalizeWeatherVoice(nvs.GetInt(kWeatherVoiceKey, kWeatherVoiceXiaolin));
 }
 
 void SetWeatherVoice(int voice) {
@@ -82,20 +84,22 @@ void SetWeatherVoice(int voice) {
 }
 
 int NextWeatherVoice(int current) {
-    return NormalizeWeatherVoice(current) == kWeatherVoiceXiaole ? kWeatherVoiceFemaleA
-                                                                 : kWeatherVoiceXiaole;
+    return NormalizeWeatherVoice(current);
 }
 
 std::string FormatWeatherVoice(int voice) {
-    return NormalizeWeatherVoice(voice) == kWeatherVoiceFemaleA ? "女声A" : "小乐";
+    NormalizeWeatherVoice(voice);
+    return "小林";
 }
 
 const char* WeatherVoiceToken(int voice) {
-    return NormalizeWeatherVoice(voice) == kWeatherVoiceFemaleA ? "female_a" : "xiaole";
+    NormalizeWeatherVoice(voice);
+    return "xiao_lin";
 }
 
 int ParseWeatherVoice(const std::string& text) {
-    return text == "female_a" ? kWeatherVoiceFemaleA : kWeatherVoiceXiaole;
+    if (text == "xiao_lin") return kWeatherVoiceXiaolin;
+    return kWeatherVoiceXiaolin;
 }
 
 int GetLastBroadcastDate() {
