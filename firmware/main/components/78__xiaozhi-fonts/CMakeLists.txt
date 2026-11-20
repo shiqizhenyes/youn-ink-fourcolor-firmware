@@ -1,17 +1,15 @@
 idf_component_register(
     SRCS
         "src/cbin_font.c"
-        "src/SourceHanSansSC_Medium_slim.c"
-        "src/SourceHanSansSC_Regular_slim.c"
+        "src/wqy/wqy_bitmap_song_12.c"
+        "src/wqy/wqy_bitmap_song_14.c"
+        "src/wqy/wqy_bitmap_song_16.c"
+        "src/wqy/inksight_temp_48.c"
         "src/font_zectrix_16_1.c"
         "src/font_zectrix_48_1.c"
         "src/weather_icons/weather_icons_16.c"
         "src/weather_icons/weather_icons_48.c"
         "src/fa_settings/fa_settings_16.c"
-        "src/inksight/inksight_cjk_12.c"
-        "src/inksight/inksight_cjk_14.c"
-        "src/inksight/inksight_cjk_16.c"
-        "src/inksight/inksight_temp_48.c"
         "src/inksight/inksight_weather_icons.c"
         "src/inksight/inksight_almanac_ornaments.c"
     INCLUDE_DIRS
