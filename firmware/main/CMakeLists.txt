@@ -180,9 +180,6 @@ idf_component_register(
 )
 
 # Offline Chinese TTS voice for weather announcements (see common/weather_speaker.cc).
-idf_component_get_property(esp_sr_dir espressif__esp-sr COMPONENT_DIR)
-esptool_py_flash_to_partition(flash "voice_data"
-    "${esp_sr_dir}/esp-tts/esp_tts_chinese/esp_tts_voice_data_xiaole.dat")
 esptool_py_flash_to_partition(flash "lingtts_model"
     "${CMAKE_CURRENT_LIST_DIR}/../third_party/lingtts/assets/lingtts.bin")
 esptool_py_flash_to_partition(flash "lingtts_fe"
