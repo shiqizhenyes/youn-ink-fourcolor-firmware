@@ -260,6 +260,10 @@ void Application::Initialize() {
         if (!board.GetBatteryLevel(battery_level, battery_charging, battery_discharging)) {
             battery_level = -1;
         }
+        ui::RawDrawStatusBarData status = rawdraw_ui_manager_->GetStatusBarData();
+        status.battery_level = battery_level;
+        status.battery_charging = battery_charging;
+        rawdraw_ui_manager_->UpdateStatusBar(status);
         rawdraw::SettingsItemDef battery_item{"电池", "", nullptr, rawdraw::SettingsItemType::Meter, false};
         battery_item.slider_value = battery_level;
         items.push_back(std::move(battery_item));
@@ -583,15 +587,9 @@ void Application::SetupInkWeather() {
             wake_refresh_cancelled_ = true;
         }
         if (page == ui::RawDrawPageId::Settings) {
-            int level = -1;
-            bool charging = false;
-            bool discharging = false;
-            if (!Board::GetInstance().GetBatteryLevel(level, charging, discharging)) {
-                level = -1;
-            }
-            if (auto* settings = rawdraw_ui_manager_->GetSettingsRenderer()) {
-                settings->UpdateMeter(kSettingsBatteryIndex, level);
-            }
+            // One sample feeds both the status-bar icon and the settings meter.
+            // SwitchPage renders after this callback, so do not request another refresh.
+            UpdateStatusBarForUi(false);
         }
         OnWeatherPageSwitched(page == ui::RawDrawPageId::Weather);
     });
@@ -1465,6 +1463,11 @@ void Application::UpdateStatusBarForUi(bool request_panel_refresh) {
     bool charging = false;
     bool discharging = false;
     const bool battery_ok = board.GetBatteryLevel(battery_level, charging, discharging);
+    // A failed read still writes percent 0. Keep that off both widgets so the
+    // icon is hidden and the settings meter shows "--" instead of an empty cell.
+    if (!battery_ok) {
+        battery_level = -1;
+    }
 
     if (rawdraw_ui_manager_) {
         const bool wifi_connected = wifi_connected_.load(std::memory_order_acquire);
@@ -1485,7 +1488,7 @@ void Application::UpdateStatusBarForUi(bool request_panel_refresh) {
                                          ? lan_ip
                                          : "");
         if (auto* settings = rawdraw_ui_manager_->GetSettingsRenderer()) {
-            settings->UpdateMeter(kSettingsBatteryIndex, battery_ok ? battery_level : -1);
+            settings->UpdateMeter(kSettingsBatteryIndex, battery_level);
         }
         // Quiet timer wakes refresh the panel once, when their own work is done.
         // Sleep teardown must not queue a new ~20s four-color refresh before PowerEpdOff.
