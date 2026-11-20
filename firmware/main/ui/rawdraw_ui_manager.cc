@@ -89,6 +89,13 @@ bool IsNavigationClick(const rawdraw::ButtonEvent& event) {
            event.type == rawdraw::ButtonEvent::kBootClick;
 }
 
+int ProportionalFill(int inner, int level) {
+    if (level <= 0 || inner <= 0) return 0;
+    if (level >= 100) return inner;
+    const int fill = inner * level / 100;
+    return fill < 1 ? 1 : fill;
+}
+
 void DrawBatteryIcon(uint8_t* fb, int width, int x, int y, int level, bool vertical) {
     level = std::max(0, std::min(100, level));
     const rawdraw::Color battery_color =
@@ -99,26 +106,23 @@ void DrawBatteryIcon(uint8_t* fb, int width, int x, int y, int level, bool verti
         const int body_h = 14;
         rawdraw::DrawRectBorder(fb, width, {x, y + cap_h, body_w, body_h}, 1, battery_color);
         rawdraw::DrawRect(fb, width, {x + 3, y, 3, cap_h}, battery_color);
-        const int seg_h = 3;
-        const int gap = 1;
-        const int filled = level >= 90 ? 3 : (level >= 50 ? 2 : (level > 10 ? 1 : 0));
-        for (int i = 0; i < 3; ++i) {
-            if (i >= 3 - filled) {
-                const int sy = y + 3 + i * (seg_h + gap);
-                rawdraw::DrawRect(fb, width, {x + 2, sy, body_w - 4, seg_h}, battery_color);
-            }
+        const int inner_w = body_w - 4;
+        const int inner_h = body_h - 4;
+        const int fill_h = ProportionalFill(inner_h, level);
+        if (fill_h > 0) {
+            const int sy = y + cap_h + 2 + (inner_h - fill_h);
+            rawdraw::DrawRect(fb, width, {x + 2, sy, inner_w, fill_h}, battery_color);
         }
     } else {
         const int body_w = 24;
         const int body_h = 12;
         rawdraw::DrawRectBorder(fb, width, {x, y, body_w, body_h}, 1, battery_color);
         rawdraw::DrawRect(fb, width, {x + body_w, y + 3, 2, 6}, battery_color);
-        const int seg_w = 6;
-        const int gap = 1;
-        const int filled = level >= 90 ? 3 : (level >= 50 ? 2 : (level > 10 ? 1 : 0));
-        for (int i = 0; i < filled; ++i) {
-            const int sx = x + 2 + i * (seg_w + gap);
-            rawdraw::DrawRect(fb, width, {sx, y + 2, seg_w, body_h - 4}, battery_color);
+        const int inner_w = body_w - 4;
+        const int inner_h = body_h - 4;
+        const int fill_w = ProportionalFill(inner_w, level);
+        if (fill_w > 0) {
+            rawdraw::DrawRect(fb, width, {x + 2, y + 2, fill_w, inner_h}, battery_color);
         }
     }
 }
