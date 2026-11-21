@@ -1014,6 +1014,9 @@ void RawDrawUiManager::RenderAll(uint8_t* fb, int width, int height) {
     }
 
     if (quick_switch_open_) {
+        // Keep a dialog-free frame so confirming the current page, or the same
+        // confirm after sleep, can restore the page underneath.
+        SnapshotQuickSwitchBacking(fb);
         DrawQuickSwitchOverlay(fb, width, height);
     }
 }
@@ -1206,9 +1209,15 @@ bool RawDrawUiManager::HandleQuickSwitchInput(const rawdraw::ButtonEvent& event)
             }
             return true;
         case rawdraw::ButtonEvent::kBootClick: {
+            const auto target = items[quick_switch_index_].page;
             quick_switch_open_ = false;
+            if (target == current_page_) {
+                // Leave the backing in place. The caller restores it and refreshes
+                // with the page waveform: fast on Settings, full everywhere else.
+                return true;
+            }
             quick_switch_backing_.clear();
-            SwitchPage(items[quick_switch_index_].page);
+            SwitchPage(target);
             return true;
         }
         case rawdraw::ButtonEvent::kUpDoubleClick:
@@ -1703,6 +1712,11 @@ void RawDrawUiManager::PumpClockRefresh() {
         // Only the status bar (clock) region changes each minute, so analyze_frame_diff
         // will see a small diff_ratio and trigger partial refresh (EPD_DisplayPart)
         // instead of a full refresh (EPD_Display) that causes visible flashing.
+        // The quick switch must start from a clean frame; otherwise its backing
+        // snapshot keeps the previous dialog.
+        if (quick_switch_open_) {
+            rawdraw::Clear(fb, width_, height_);
+        }
         RenderAll(fb, width_, height_);
         if (mutex) xSemaphoreGive(mutex);
         TriggerRefresh(false);
@@ -1948,7 +1962,9 @@ void RawDrawUiManager::VoiceWakeupTrigger(bool network_available) {
     if (fb) {
         auto* mutex = lcd_->GetMutex();
         if (mutex) xSemaphoreTake(mutex, portMAX_DELAY);
-
+        if (quick_switch_open_) {
+            rawdraw::Clear(fb, width_, height_);
+        }
         RenderAll(fb, width_, height_);
 
         if (mutex) xSemaphoreGive(mutex);
@@ -1964,7 +1980,9 @@ void RawDrawUiManager::VoiceWakeupDone() {
     if (fb) {
         auto* mutex = lcd_->GetMutex();
         if (mutex) xSemaphoreTake(mutex, portMAX_DELAY);
-
+        if (quick_switch_open_) {
+            rawdraw::Clear(fb, width_, height_);
+        }
         RenderAll(fb, width_, height_);
 
         if (mutex) xSemaphoreGive(mutex);
