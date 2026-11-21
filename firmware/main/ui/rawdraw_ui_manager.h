@@ -166,6 +166,13 @@ public:
         status_bar_data_.page_title = GetPageTitle(page);
         status_bar_data_.central_text.clear();
     }
+    /**
+     * @brief Call before Init(): reopen the quick switch on the row selected before sleep.
+     * Index and scroll are clamped to the current menu.
+     */
+    void SetInitialQuickSwitch(int index, int first_visible);
+    /** @brief Redraw the framebuffer, including an open quick switch, without refreshing the panel. */
+    void RenderFramebuffer();
     /** @brief Call before Init(): render the first frame without refreshing the panel */
     void SetSkipInitialRefresh(bool skip) { skip_initial_refresh_ = skip; }
     bool IsDisplayRefreshPending() const;
@@ -201,6 +208,8 @@ public:
      * are consumed by the modal and do not leak into Todo/Gallery/etc.
      */
     bool IsQuickSwitchOpen() const { return quick_switch_open_; }
+    int GetQuickSwitchIndex() const { return quick_switch_index_; }
+    int GetQuickSwitchFirstVisible() const { return quick_switch_first_visible_; }
     bool IsApTransferRunning() const {
         return ap_transfer_server_ && ap_transfer_server_->IsRunning();
     }

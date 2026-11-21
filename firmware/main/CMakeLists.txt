@@ -192,5 +192,5 @@ target_compile_definitions(
     BOARD_NAME=\"zectrix-s3-epaper-4.2\"
     BUILTIN_TEXT_FONT=SourceHanSansSC_Regular_slim
     BUILTIN_ICON_FONT=font_zectrix_16_1
-    PROJECT_VER=\"6.6.3\"  # F5: Make version available to renderer code
+    PROJECT_VER=\"6.6.3.1\"  # F5: Make version available to renderer code
 )

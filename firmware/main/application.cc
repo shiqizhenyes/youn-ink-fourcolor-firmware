@@ -70,11 +70,42 @@ enum TimerWakeReason : int {
     kTimerWakeCalendar = 3,
 };
 RTC_DATA_ATTR int s_timer_wake_reason = kTimerWakeNone;
-// Page shown when the device went to sleep; restored on wake for settings, weather, and calendar.
+// Page shown when the device went to sleep. Settings, weather, and calendar are
+// restored on wake; any known page is restored when the quick switch was open.
 RTC_DATA_ATTR int s_sleep_page = -1;
 // Settings row selected before sleep. The left category follows this row.
 RTC_DATA_ATTR char s_settings_selected_label[48] = {};
+// Quick switch modal. Kept across deep sleep so wake redraws the same row with fast refresh.
+RTC_DATA_ATTR int s_quick_switch_open = 0;
+RTC_DATA_ATTR int s_quick_switch_index = 0;
+RTC_DATA_ATTR int s_quick_switch_first_visible = 0;
 constexpr char kSettingsFastBaselinePath[] = "/spiffs/settings_fast.bin";
+
+bool IsKnownRawDrawPage(int page) {
+    switch (static_cast<ui::RawDrawPageId>(page)) {
+        case ui::RawDrawPageId::Chat:
+        case ui::RawDrawPageId::Ebook:
+        case ui::RawDrawPageId::Wifi:
+        case ui::RawDrawPageId::Settings:
+        case ui::RawDrawPageId::Gallery:
+        case ui::RawDrawPageId::Weather:
+        case ui::RawDrawPageId::News:
+        case ui::RawDrawPageId::WeatherDetail:
+        case ui::RawDrawPageId::PhotoDetail:
+        case ui::RawDrawPageId::LifeBar:
+        case ui::RawDrawPageId::Almanac:
+        case ui::RawDrawPageId::Log:
+        case ui::RawDrawPageId::YearProgress:
+        case ui::RawDrawPageId::Calendar:
+        case ui::RawDrawPageId::FontDebug:
+        case ui::RawDrawPageId::FontMetrics:
+        case ui::RawDrawPageId::APTransfer:
+            return true;
+        case ui::RawDrawPageId::Count:
+            break;
+    }
+    return false;
+}
 
 int LocalDateKey(const struct tm& tm) {
     return (tm.tm_year + 1900) * 10000 + (tm.tm_mon + 1) * 100 + tm.tm_mday;
@@ -214,12 +245,23 @@ void Application::Initialize() {
 
     auto* lcd = static_cast<CustomLcdDisplay*>(display);
     rawdraw_ui_manager_ = std::make_unique<ui::RawDrawUiManager>();
-    const bool restore_sleep_page =
-        from_deep_sleep && (s_sleep_page == static_cast<int>(ui::RawDrawPageId::Settings) ||
-                            s_sleep_page == static_cast<int>(ui::RawDrawPageId::Weather) ||
-                            s_sleep_page == static_cast<int>(ui::RawDrawPageId::Calendar));
+    const bool quick_switch_was_open = from_deep_sleep && s_quick_switch_open != 0;
+    const int quick_switch_index = s_quick_switch_index;
+    const int quick_switch_first_visible = s_quick_switch_first_visible;
+    s_quick_switch_open = 0;
+    const bool restore_named_page =
+        s_sleep_page == static_cast<int>(ui::RawDrawPageId::Settings) ||
+        s_sleep_page == static_cast<int>(ui::RawDrawPageId::Weather) ||
+        s_sleep_page == static_cast<int>(ui::RawDrawPageId::Calendar);
+    const bool restore_sleep_page = from_deep_sleep && IsKnownRawDrawPage(s_sleep_page) &&
+                                    (quick_switch_was_open || restore_named_page);
     if (restore_sleep_page) {
         rawdraw_ui_manager_->SetInitialPage(static_cast<ui::RawDrawPageId>(s_sleep_page));
+    }
+    if (quick_switch_was_open) {
+        rawdraw_ui_manager_->SetInitialQuickSwitch(quick_switch_index, quick_switch_first_visible);
+        ESP_LOGI(kTag, "Restore quick switch index=%d first=%d page=%d",
+                 quick_switch_index, quick_switch_first_visible, s_sleep_page);
     }
     s_sleep_page = -1;
     const bool button_wake = from_deep_sleep && !timer_wake;
@@ -227,7 +269,8 @@ void Application::Initialize() {
     // Keep the previous e-paper image until Wi-Fi connects or the connect wait ends.
     rawdraw_ui_manager_->SetSkipInitialRefresh(woke_for_refresh_ || woke_for_broadcast_ || button_wake);
     if (from_deep_sleep &&
-        rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::Settings) {
+        (quick_switch_was_open ||
+         rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::Settings)) {
         lcd->LoadFastBaseline(kSettingsFastBaselinePath);
     }
     rawdraw::ApTransferServer::SetActivityCallback([this]() { MarkUserActivity(); });
@@ -391,6 +434,12 @@ void Application::Initialize() {
 
     SetupInkWeather();
     SetupWeatherSettingsItems();
+    // Settings rows and weather data are filled after Init(). Rebuild the
+    // in-memory frame so a same-page confirm restores that content. The panel
+    // refresh still waits for the normal wake path.
+    if (quick_switch_was_open && rawdraw_ui_manager_) {
+        rawdraw_ui_manager_->RenderFramebuffer();
+    }
 
     ESP_LOGI(kTag, "Rawdraw gallery UI initialized");
     if (woke_for_broadcast_) {
@@ -1379,6 +1428,16 @@ void Application::EnterManualSleep() {
     }
     s_sleep_page = rawdraw_ui_manager_ ? static_cast<int>(rawdraw_ui_manager_->GetCurrentPage())
                                        : static_cast<int>(ui::RawDrawPageId::Gallery);
+    s_quick_switch_open = 0;
+    s_quick_switch_index = 0;
+    s_quick_switch_first_visible = 0;
+    if (rawdraw_ui_manager_ && rawdraw_ui_manager_->IsQuickSwitchOpen()) {
+        s_quick_switch_open = 1;
+        s_quick_switch_index = rawdraw_ui_manager_->GetQuickSwitchIndex();
+        s_quick_switch_first_visible = rawdraw_ui_manager_->GetQuickSwitchFirstVisible();
+        ESP_LOGI(kTag, "Sleep with quick switch index=%d first=%d page=%d",
+                 s_quick_switch_index, s_quick_switch_first_visible, s_sleep_page);
+    }
     s_settings_selected_label[0] = '\0';
     if (rawdraw_ui_manager_ &&
         rawdraw_ui_manager_->GetCurrentPage() == ui::RawDrawPageId::Settings) {
@@ -1396,7 +1455,7 @@ void Application::EnterManualSleep() {
     esp_wifi_stop();
     vTaskDelay(pdMS_TO_TICKS(300));
     WaitForDisplayRefreshIdle();
-    if (s_sleep_page == static_cast<int>(ui::RawDrawPageId::Settings)) {
+    if (s_sleep_page == static_cast<int>(ui::RawDrawPageId::Settings) || s_quick_switch_open != 0) {
         auto* lcd = static_cast<CustomLcdDisplay*>(Board::GetInstance().GetDisplay());
         if (lcd == nullptr || !lcd->SaveFastBaseline(kSettingsFastBaselinePath)) {
             remove(kSettingsFastBaselinePath);

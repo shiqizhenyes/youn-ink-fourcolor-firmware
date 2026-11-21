@@ -4,7 +4,7 @@
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.16)
 
-set(PROJECT_VER "6.6.3")
+set(PROJECT_VER "6.6.3.1")
 
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/lingtts_sdk.cmake")
 set(LINGTTS_SDK "${CMAKE_CURRENT_LIST_DIR}/third_party/lingtts")

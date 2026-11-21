@@ -671,6 +671,44 @@ bool RawDrawUiManager::TryDisplayCurrentPhotoRaw4Color() {
     return shown;
 }
 
+void RawDrawUiManager::RenderFramebuffer() {
+    auto* fb = lcd_ ? lcd_->GetFramebuffer() : nullptr;
+    if (!fb) return;
+    auto* mutex = lcd_->GetMutex();
+    if (mutex) xSemaphoreTake(mutex, portMAX_DELAY);
+    rawdraw::Clear(fb, width_, height_);
+    RenderAll(fb, width_, height_);
+    if (mutex) xSemaphoreGive(mutex);
+}
+
+void RawDrawUiManager::SetInitialQuickSwitch(int index, int first_visible) {
+    const auto& items = GetQuickSwitchItems();
+    const int kVisibleCount = 5;
+    const int total = static_cast<int>(items.size());
+    if (total <= 0) {
+        quick_switch_open_ = false;
+        quick_switch_index_ = 0;
+        quick_switch_first_visible_ = 0;
+        return;
+    }
+    if (index < 0 || index >= total) {
+        index = 0;
+    }
+    if (first_visible < 0 || first_visible > index) {
+        first_visible = index;
+    }
+    if (index >= first_visible + kVisibleCount) {
+        first_visible = index - kVisibleCount + 1;
+    }
+    const int max_first = std::max(0, total - kVisibleCount);
+    if (first_visible > max_first) {
+        first_visible = max_first;
+    }
+    quick_switch_open_ = true;
+    quick_switch_index_ = index;
+    quick_switch_first_visible_ = first_visible;
+}
+
 const std::array<RawDrawUiManager::QuickSwitchItem, 4>& RawDrawUiManager::GetQuickSwitchItems() {
     static const std::array<QuickSwitchItem, 4> kItems = {{
         {RawDrawPageId::Gallery, "相册", FA_SETTINGS_IMAGE},
